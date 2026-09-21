@@ -8,6 +8,7 @@ from ragforge.domain.exceptions import (
     IngestionError,
     RAGForgeError,
     UnsupportedFileTypeError,
+    VectorDimensionMismatchError,
     VectorStoreError,
 )
 from ragforge.domain.models import (
@@ -35,5 +36,6 @@ __all__ = [
     "RetrievedChunk",
     "SearchStrategy",
     "UnsupportedFileTypeError",
+    "VectorDimensionMismatchError",
     "VectorStoreError",
 ]

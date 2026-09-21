@@ -10,9 +10,11 @@ RAGForge is a production-oriented Agentic Retrieval-Augmented Generation (RAG) p
 
 ## Current Capabilities
 
-RAGForge currently provides deterministic text and Markdown document ingestion and chunking:
+RAGForge currently provides:
 - **Document Loaders**: `TextDocumentLoader` and `MarkdownDocumentLoader` for ingesting `.txt` and `.md`/`.markdown` files with validation, deterministic SHA-256 content hashing, UUIDv5 document identity, and source metadata extraction.
 - **Deterministic Chunker**: `DeterministicChunker` providing boundary-aware text and Markdown splitting with configurable chunk size, overlap, sequential indexing, exact character offset spans, section header provenance preservation, and deterministic chunk hashing.
+- **Deterministic Embedding Provider**: `DeterministicEmbeddingProvider` implementing the `BaseEmbeddingProvider` port using reproducible token and n-gram feature hashing with L2 normalization (designed for offline development and testing, to be augmented with production model providers in later stages).
+- **In-Memory Vector Retrieval**: `InMemoryVectorStore` implementing the `BaseVectorStore` port with exact cosine similarity search, and `RetrievalService` coordinating query embedding, k-NN ranking, and metadata provenance propagation.
 
 ## Local Setup
 

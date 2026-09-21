@@ -2,5 +2,6 @@
 
 from ragforge.core.config import Settings, get_settings
 from ragforge.core.logging import setup_logging
+from ragforge.core.similarity import cosine_similarity
 
-__all__ = ["Settings", "get_settings", "setup_logging"]
+__all__ = ["Settings", "cosine_similarity", "get_settings", "setup_logging"]

@@ -28,3 +28,7 @@ class ChunkingError(RAGForgeError):
 
 class VectorStoreError(RAGForgeError):
     """Raised when a vector store operation fails."""
+
+
+class VectorDimensionMismatchError(VectorStoreError):
+    """Raised when a vector dimension does not match the expected store dimension."""
