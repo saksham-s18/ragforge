@@ -8,6 +8,12 @@ RAGForge is a production-oriented Agentic Retrieval-Augmented Generation (RAG) p
 - **Active Branch**: `feat/day1-foundation`
 - **Implemented**: Clean architecture package layout, core domain models, abstract port definitions, typed Pydantic configuration, structured application logging, FastAPI application factory with health check endpoint, and unit test suite.
 
+## Current Capabilities
+
+RAGForge currently provides deterministic text and Markdown document ingestion and chunking:
+- **Document Loaders**: `TextDocumentLoader` and `MarkdownDocumentLoader` for ingesting `.txt` and `.md`/`.markdown` files with validation, deterministic SHA-256 content hashing, UUIDv5 document identity, and source metadata extraction.
+- **Deterministic Chunker**: `DeterministicChunker` providing boundary-aware text and Markdown splitting with configurable chunk size, overlap, sequential indexing, exact character offset spans, section header provenance preservation, and deterministic chunk hashing.
+
 ## Local Setup
 
 ### Prerequisites

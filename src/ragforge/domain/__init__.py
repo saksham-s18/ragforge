@@ -2,9 +2,12 @@
 
 from ragforge.domain.enums import DocumentStatus, MimeType, SearchStrategy
 from ragforge.domain.exceptions import (
+    ChunkingError,
     DocumentNotFoundError,
+    EmptyDocumentError,
     IngestionError,
     RAGForgeError,
+    UnsupportedFileTypeError,
     VectorStoreError,
 )
 from ragforge.domain.models import (
@@ -19,15 +22,18 @@ from ragforge.domain.models import (
 __all__ = [
     "Chunk",
     "ChunkMetadata",
+    "ChunkingError",
     "Citation",
     "Document",
     "DocumentNotFoundError",
     "DocumentStatus",
+    "EmptyDocumentError",
     "IngestionError",
     "MimeType",
     "Query",
     "RAGForgeError",
     "RetrievedChunk",
     "SearchStrategy",
+    "UnsupportedFileTypeError",
     "VectorStoreError",
 ]
