@@ -11,7 +11,10 @@ from ragforge.adapters.loaders import (
     TextDocumentLoader,
     generate_document_id,
 )
-from ragforge.adapters.vector_stores import InMemoryVectorStore
+from ragforge.adapters.vector_stores import (
+    InMemoryVectorStore,
+    QdrantVectorStore,
+)
 
 __all__ = [
     "BaseFileLoader",
@@ -19,6 +22,7 @@ __all__ = [
     "DeterministicEmbeddingProvider",
     "InMemoryVectorStore",
     "MarkdownDocumentLoader",
+    "QdrantVectorStore",
     "TextDocumentLoader",
     "approximate_token_count",
     "generate_document_id",

@@ -12,6 +12,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.7.0",
+    "qdrant-client>=1.19.1",
     "uvicorn[standard]>=0.34.0",
 ]
 
@@ -35,6 +36,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "ignore::DeprecationWarning",
+]
+markers = [
+    "integration: marks tests as requiring external infrastructure such as running Qdrant (run with '-m integration')",
 ]
 
 [tool.ruff]

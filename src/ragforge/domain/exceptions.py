@@ -32,3 +32,7 @@ class VectorStoreError(RAGForgeError):
 
 class VectorDimensionMismatchError(VectorStoreError):
     """Raised when a vector dimension does not match the expected store dimension."""
+
+
+class VectorStoreConnectionError(VectorStoreError):
+    """Raised when connecting to the vector store fails or times out."""

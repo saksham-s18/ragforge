@@ -50,12 +50,46 @@ RAGForge currently provides:
    cp .env.example .env
    ```
 
-## Running the Tests
+## Vector Store Infrastructure
 
-Execute the automated test suite with `pytest`:
+RAGForge supports interchangeable vector store backends conforming to `BaseVectorStore`:
+
+- **Qdrant (`QdrantVectorStore`)**: The production vector store backend providing persistent vector indexing and payload-filtered cosine similarity search.
+- **In-Memory (`InMemoryVectorStore`)**: Fast, dependency-free in-memory vector store retained for lightweight unit tests, CI runs, and offline exploration without external infrastructure.
+
+### Starting Local Qdrant
+
+Start the local Qdrant instance using Docker Compose:
 
 ```bash
-pytest
+docker compose up -d
+```
+
+Verify service status:
+
+```bash
+docker compose ps
+curl http://localhost:6333/healthz
+```
+
+To stop Qdrant:
+
+```bash
+docker compose down
+```
+
+## Running the Tests
+
+Execute unit tests (runs offline without external infrastructure):
+
+```bash
+uv run pytest
+```
+
+Execute integration tests against a running Qdrant instance:
+
+```bash
+uv run pytest -m integration -v
 ```
 
 Run code formatting and linting:

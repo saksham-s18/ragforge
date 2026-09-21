@@ -31,13 +31,21 @@ class Settings(BaseSettings):
         default=None,
         description="PostgreSQL async connection string",
     )
-    qdrant_url: str | None = Field(
-        default=None,
+    qdrant_url: str = Field(
+        default="http://localhost:6333",
         description="Qdrant vector database endpoint URL",
     )
     qdrant_api_key: str | None = Field(
         default=None,
         description="Optional API key for Qdrant Cloud or protected instances",
+    )
+    qdrant_collection: str = Field(
+        default="ragforge_chunks",
+        description="Default Qdrant collection name for chunk storage",
+    )
+    qdrant_vector_dimension: int = Field(
+        default=64,
+        description="Configured vector dimensionality for Qdrant collection",
     )
     embedding_provider: str = Field(
         default="openai",

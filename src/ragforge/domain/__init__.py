@@ -9,6 +9,7 @@ from ragforge.domain.exceptions import (
     RAGForgeError,
     UnsupportedFileTypeError,
     VectorDimensionMismatchError,
+    VectorStoreConnectionError,
     VectorStoreError,
 )
 from ragforge.domain.models import (
@@ -37,5 +38,6 @@ __all__ = [
     "SearchStrategy",
     "UnsupportedFileTypeError",
     "VectorDimensionMismatchError",
+    "VectorStoreConnectionError",
     "VectorStoreError",
 ]
