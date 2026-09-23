@@ -4,7 +4,10 @@ from ragforge.adapters.chunkers import (
     DeterministicChunker,
     approximate_token_count,
 )
-from ragforge.adapters.embeddings import DeterministicEmbeddingProvider
+from ragforge.adapters.embeddings import (
+    DeterministicEmbeddingProvider,
+    FastEmbedProvider,
+)
 from ragforge.adapters.loaders import (
     BaseFileLoader,
     MarkdownDocumentLoader,
@@ -20,6 +23,7 @@ __all__ = [
     "BaseFileLoader",
     "DeterministicChunker",
     "DeterministicEmbeddingProvider",
+    "FastEmbedProvider",
     "InMemoryVectorStore",
     "MarkdownDocumentLoader",
     "QdrantVectorStore",

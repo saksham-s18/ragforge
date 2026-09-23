@@ -13,7 +13,9 @@ def test_settings_load_defaults() -> None:
     assert settings.host == "0.0.0.0"
     assert settings.port == 8000
     assert settings.api_v1_prefix == "/api/v1"
-    assert settings.embedding_provider == "openai"
+    assert settings.embedding_provider == "deterministic"
+    assert settings.embedding_model == "BAAI/bge-small-en-v1.5"
+    assert settings.embedding_cache_dir is None
     assert settings.llm_provider == "openai"
     assert settings.database_url is None
     assert settings.qdrant_url == "http://localhost:6333"
@@ -38,6 +40,9 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RAGFORGE_QDRANT_URL", "http://qdrant.internal:6333")
     monkeypatch.setenv("RAGFORGE_QDRANT_COLLECTION", "custom_collection")
     monkeypatch.setenv("RAGFORGE_QDRANT_VECTOR_DIMENSION", "128")
+    monkeypatch.setenv("RAGFORGE_EMBEDDING_PROVIDER", "fastembed")
+    monkeypatch.setenv("RAGFORGE_EMBEDDING_MODEL", "custom-model")
+    monkeypatch.setenv("RAGFORGE_EMBEDDING_CACHE_DIR", "/tmp/models")
 
     settings = Settings()
     assert settings.app_name == "custom_ragforge"
@@ -47,3 +52,6 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.qdrant_url == "http://qdrant.internal:6333"
     assert settings.qdrant_collection == "custom_collection"
     assert settings.qdrant_vector_dimension == 128
+    assert settings.embedding_provider == "fastembed"
+    assert settings.embedding_model == "custom-model"
+    assert settings.embedding_cache_dir == "/tmp/models"

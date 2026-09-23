@@ -4,6 +4,8 @@ from ragforge.domain.enums import DocumentStatus, MimeType, SearchStrategy
 from ragforge.domain.exceptions import (
     ChunkingError,
     DocumentNotFoundError,
+    EmbeddingError,
+    EmbeddingModelNotFoundError,
     EmptyDocumentError,
     IngestionError,
     RAGForgeError,
@@ -29,6 +31,8 @@ __all__ = [
     "Document",
     "DocumentNotFoundError",
     "DocumentStatus",
+    "EmbeddingError",
+    "EmbeddingModelNotFoundError",
     "EmptyDocumentError",
     "IngestionError",
     "MimeType",

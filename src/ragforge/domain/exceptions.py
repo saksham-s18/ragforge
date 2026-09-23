@@ -36,3 +36,11 @@ class VectorDimensionMismatchError(VectorStoreError):
 
 class VectorStoreConnectionError(VectorStoreError):
     """Raised when connecting to the vector store fails or times out."""
+
+
+class EmbeddingError(RAGForgeError):
+    """Raised when embedding generation fails."""
+
+
+class EmbeddingModelNotFoundError(EmbeddingError):
+    """Raised when the specified embedding model cannot be found or loaded."""

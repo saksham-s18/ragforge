@@ -48,8 +48,16 @@ class Settings(BaseSettings):
         description="Configured vector dimensionality for Qdrant collection",
     )
     embedding_provider: str = Field(
-        default="openai",
-        description="Embedding provider identifier (e.g. openai, fastembed)",
+        default="deterministic",
+        description="Embedding provider identifier (e.g. deterministic, fastembed)",
+    )
+    embedding_model: str = Field(
+        default="BAAI/bge-small-en-v1.5",
+        description="Embedding model name or identifier (e.g. BAAI/bge-small-en-v1.5)",
+    )
+    embedding_cache_dir: str | None = Field(
+        default=None,
+        description="Optional local cache directory for embedding models",
     )
     openai_api_key: str | None = Field(
         default=None,
