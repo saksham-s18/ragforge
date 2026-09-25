@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
-from ragforge.domain.enums import DocumentStatus, MimeType, SearchStrategy
+from ragforge.domain.enums import DocumentStatus, IndexingStatus, MimeType, SearchStrategy
 
 
 class Document(BaseModel):
@@ -74,3 +74,55 @@ class Citation(BaseModel):
     document_title: str
     page_number: int | None = None
     matched_text_snippet: str
+
+
+class DocumentIndexRecord(BaseModel):
+    """Record tracking the indexed state of a document for incremental indexing."""
+
+    file_path: str
+    document_id: UUID
+    content_hash: str
+    chunk_count: int = 0
+    indexed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DocumentIndexingResult(BaseModel):
+    """Outcome for an individual document during an indexing run."""
+
+    file_path: str
+    status: IndexingStatus
+    document_id: UUID | None = None
+    chunk_count: int = 0
+    content_hash: str | None = None
+    error: str | None = None
+
+
+class IndexingResult(BaseModel):
+    """Aggregate statistics and document outcomes for an indexing execution."""
+
+    discovered_documents: int = 0
+    indexed_documents: int = 0
+    updated_documents: int = 0
+    skipped_documents: int = 0
+    failed_documents: int = 0
+    chunks_created: int = 0
+    vectors_upserted: int = 0
+    duration_seconds: float = 0.0
+    documents: list[DocumentIndexingResult] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+    @property
+    def total_processed(self) -> int:
+        """Total number of documents evaluated during the run."""
+        return (
+            self.indexed_documents
+            + self.updated_documents
+            + self.skipped_documents
+            + self.failed_documents
+        )
+
+    @property
+    def is_success(self) -> bool:
+        """True if no document-level failures occurred during indexing."""
+        return self.failed_documents == 0

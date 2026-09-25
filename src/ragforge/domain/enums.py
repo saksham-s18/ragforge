@@ -25,3 +25,12 @@ class SearchStrategy(StrEnum):
     DENSE = "dense"
     SPARSE = "sparse"
     HYBRID = "hybrid"
+
+
+class IndexingStatus(StrEnum):
+    """Status of an individual document in an indexing run."""
+
+    INDEXED = "indexed"
+    UPDATED = "updated"
+    SKIPPED = "skipped"
+    FAILED = "failed"

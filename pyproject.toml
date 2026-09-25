@@ -26,6 +26,9 @@ dev = [
     "ruff>=0.9.0",
 ]
 
+[project.scripts]
+ragforge = "ragforge.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/ragforge"]
 
@@ -40,6 +43,7 @@ filterwarnings = [
 ]
 markers = [
     "integration: marks tests as requiring external infrastructure such as running Qdrant (run with '-m integration')",
+    "benchmark: marks performance and throughput benchmark tests (run with '-m benchmark')",
 ]
 
 [tool.ruff]

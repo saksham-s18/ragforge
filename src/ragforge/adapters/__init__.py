@@ -14,6 +14,10 @@ from ragforge.adapters.loaders import (
     TextDocumentLoader,
     generate_document_id,
 )
+from ragforge.adapters.state import (
+    InMemoryIndexStateStore,
+    JsonFileIndexStateStore,
+)
 from ragforge.adapters.vector_stores import (
     InMemoryVectorStore,
     QdrantVectorStore,
@@ -24,7 +28,9 @@ __all__ = [
     "DeterministicChunker",
     "DeterministicEmbeddingProvider",
     "FastEmbedProvider",
+    "InMemoryIndexStateStore",
     "InMemoryVectorStore",
+    "JsonFileIndexStateStore",
     "MarkdownDocumentLoader",
     "QdrantVectorStore",
     "TextDocumentLoader",

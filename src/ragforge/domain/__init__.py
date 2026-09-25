@@ -1,6 +1,6 @@
 """Domain layer containing core data models, enums, and domain exceptions."""
 
-from ragforge.domain.enums import DocumentStatus, MimeType, SearchStrategy
+from ragforge.domain.enums import DocumentStatus, IndexingStatus, MimeType, SearchStrategy
 from ragforge.domain.exceptions import (
     ChunkingError,
     DocumentNotFoundError,
@@ -19,6 +19,9 @@ from ragforge.domain.models import (
     ChunkMetadata,
     Citation,
     Document,
+    DocumentIndexingResult,
+    DocumentIndexRecord,
+    IndexingResult,
     Query,
     RetrievedChunk,
 )
@@ -29,11 +32,15 @@ __all__ = [
     "ChunkingError",
     "Citation",
     "Document",
+    "DocumentIndexRecord",
+    "DocumentIndexingResult",
     "DocumentNotFoundError",
     "DocumentStatus",
     "EmbeddingError",
     "EmbeddingModelNotFoundError",
     "EmptyDocumentError",
+    "IndexingResult",
+    "IndexingStatus",
     "IngestionError",
     "MimeType",
     "Query",

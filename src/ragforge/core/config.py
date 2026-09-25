@@ -67,6 +67,14 @@ class Settings(BaseSettings):
         default="openai",
         description="Primary LLM provider identifier (e.g. openai, anthropic, ollama)",
     )
+    indexing_batch_size: int = Field(
+        default=32,
+        description="Default batch size for chunk embedding and upserting",
+    )
+    index_state_file: str = Field(
+        default=".ragforge/index_state.json",
+        description="Path to JSON file tracking document indexing state and content hashes",
+    )
 
 
 @lru_cache
