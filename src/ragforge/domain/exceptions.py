@@ -44,3 +44,90 @@ class EmbeddingError(RAGForgeError):
 
 class EmbeddingModelNotFoundError(EmbeddingError):
     """Raised when the specified embedding model cannot be found or loaded."""
+
+
+class LLMError(RAGForgeError):
+    """Base exception for all LLM provider and generation errors."""
+
+    def __init__(
+        self,
+        message: str,
+        provider: str | None = None,
+        is_fallback_eligible: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.is_fallback_eligible = is_fallback_eligible
+
+
+class LLMConfigurationError(LLMError):
+    """Raised when an LLM provider is improperly configured (e.g. missing API key)."""
+
+    def __init__(self, message: str, provider: str | None = None) -> None:
+        super().__init__(message, provider=provider, is_fallback_eligible=False)
+
+
+class LLMAuthenticationError(LLMError):
+    """Raised when provider authentication fails (e.g. invalid API key)."""
+
+    def __init__(self, message: str, provider: str | None = None) -> None:
+        super().__init__(message, provider=provider, is_fallback_eligible=False)
+
+
+class LLMInvalidRequestError(LLMError):
+    """Raised when request payload or parameters are invalid."""
+
+    def __init__(self, message: str, provider: str | None = None) -> None:
+        super().__init__(message, provider=provider, is_fallback_eligible=False)
+
+
+class LLMTransientError(LLMError):
+    """Base exception for transient/recoverable errors eligible for fallback."""
+
+    def __init__(self, message: str, provider: str | None = None) -> None:
+        super().__init__(message, provider=provider, is_fallback_eligible=True)
+
+
+class LLMRateLimitError(LLMTransientError):
+    """Raised when an LLM provider rate limit is exceeded."""
+
+
+class LLMTimeoutError(LLMTransientError):
+    """Raised when an LLM generation request times out."""
+
+
+class LLMConnectionError(LLMTransientError):
+    """Raised when network connection to an LLM provider fails."""
+
+
+class LLMProviderUnavailableError(LLMTransientError):
+    """Raised when an LLM provider service is overloaded or unavailable (5xx)."""
+
+
+class AllLLMProvidersFailedError(LLMError):
+    """Raised when both primary and fallback LLM providers fail."""
+
+    def __init__(
+        self,
+        message: str | None = None,
+        primary_provider: str | None = None,
+        fallback_provider: str | None = None,
+        primary_error: Exception | None = None,
+        fallback_error: Exception | None = None,
+    ) -> None:
+        if not message:
+            p_name = primary_provider or "primary"
+            f_name = fallback_provider or "fallback"
+            message = (
+                f"All configured LLM providers failed: primary ({p_name}) failed with "
+                f"[{primary_error}], fallback ({f_name}) failed with [{fallback_error}]."
+            )
+        super().__init__(message, provider=primary_provider, is_fallback_eligible=False)
+        self.primary_provider = primary_provider
+        self.fallback_provider = fallback_provider
+        self.primary_error = primary_error
+        self.fallback_error = fallback_error
+
+
+class RAGGenerationError(RAGForgeError):
+    """Raised when RAG generation pipeline encounters an error."""

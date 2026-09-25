@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from ragforge.api.routes.health import router as health_router
+from ragforge.api.routes.query import router as query_router
 from ragforge.core.config import Settings, get_settings
 from ragforge.core.logging import setup_logging
 
@@ -21,5 +22,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Register routes
     app.include_router(health_router)
+    app.include_router(query_router, prefix=app_settings.api_v1_prefix)
 
     return app

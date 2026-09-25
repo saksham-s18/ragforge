@@ -8,6 +8,12 @@ from ragforge.adapters.embeddings import (
     DeterministicEmbeddingProvider,
     FastEmbedProvider,
 )
+from ragforge.adapters.llm import (
+    DEFAULT_GROQ_MODEL,
+    DEFAULT_OPENAI_MODEL,
+    GroqLLMProvider,
+    OpenAILLMProvider,
+)
 from ragforge.adapters.loaders import (
     BaseFileLoader,
     MarkdownDocumentLoader,
@@ -25,13 +31,17 @@ from ragforge.adapters.vector_stores import (
 
 __all__ = [
     "BaseFileLoader",
+    "DEFAULT_GROQ_MODEL",
+    "DEFAULT_OPENAI_MODEL",
     "DeterministicChunker",
     "DeterministicEmbeddingProvider",
     "FastEmbedProvider",
+    "GroqLLMProvider",
     "InMemoryIndexStateStore",
     "InMemoryVectorStore",
     "JsonFileIndexStateStore",
     "MarkdownDocumentLoader",
+    "OpenAILLMProvider",
     "QdrantVectorStore",
     "TextDocumentLoader",
     "approximate_token_count",

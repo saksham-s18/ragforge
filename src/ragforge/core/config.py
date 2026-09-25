@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -59,13 +59,47 @@ class Settings(BaseSettings):
         default=None,
         description="Optional local cache directory for embedding models",
     )
+    groq_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GROQ_API_KEY", "RAGFORGE_GROQ_API_KEY"),
+        description="Groq API key for primary LLM generation",
+    )
     openai_api_key: str | None = Field(
         default=None,
-        description="OpenAI API key placeholder",
+        validation_alias=AliasChoices("OPENAI_API_KEY", "RAGFORGE_OPENAI_API_KEY"),
+        description="OpenAI API key for fallback LLM generation",
     )
     llm_provider: str = Field(
+        default="groq",
+        description="Primary LLM provider identifier (e.g. groq, openai)",
+    )
+    llm_model: str = Field(
+        default="llama-3.3-70b-versatile",
+        description="Primary LLM model identifier",
+    )
+    llm_fallback_provider: str | None = Field(
         default="openai",
-        description="Primary LLM provider identifier (e.g. openai, anthropic, ollama)",
+        description="Optional fallback LLM provider identifier invoked on transient errors",
+    )
+    llm_fallback_model: str = Field(
+        default="gpt-4o-mini",
+        description="Fallback LLM model identifier",
+    )
+    llm_temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2.0,
+        description="Default sampling temperature for LLM generation",
+    )
+    llm_max_tokens: int = Field(
+        default=1024,
+        gt=0,
+        description="Default maximum token count for generated completions",
+    )
+    llm_timeout: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="HTTP client timeout in seconds for LLM generation requests",
     )
     indexing_batch_size: int = Field(
         default=32,

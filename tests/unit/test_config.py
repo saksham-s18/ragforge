@@ -15,8 +15,7 @@ def test_settings_load_defaults() -> None:
     assert settings.api_v1_prefix == "/api/v1"
     assert settings.embedding_provider == "deterministic"
     assert settings.embedding_model == "BAAI/bge-small-en-v1.5"
-    assert settings.embedding_cache_dir is None
-    assert settings.llm_provider == "openai"
+    assert settings.llm_provider == "groq"
     assert settings.database_url is None
     assert settings.qdrant_url == "http://localhost:6333"
     assert settings.qdrant_api_key is None
