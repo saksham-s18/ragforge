@@ -67,3 +67,6 @@ coverage.xml
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# RAGForge Local Indexing State
+.ragforge/
