@@ -72,6 +72,91 @@ Grounded Answer + Application-Managed Source References
 7. **FastAPI Query Endpoint (`POST /api/v1/query`)**:
    - Production HTTP API endpoint accepting natural language questions and returning grounded answers with structured source references.
 
+## Retrieval Evaluation (Stage 9)
+
+RAGForge features an independent, deterministic evaluation framework designed to benchmark retrieval quality without relying on nondeterministic LLM judges.
+
+### Evaluation Architecture
+
+```
+Evaluation Dataset (JSON / JSONL)
+        ↓
+Evaluation Runner (EvaluationRunner / RetrievalEvaluationService)
+        ↓
+Retrieval Service (RetrievalService)
+        ↓
+Vector Store (InMemoryVectorStore / QdrantVectorStore)
+        ↓
+Retrieved Results (RetrievedChunk models + provenance)
+        ↓
+Metrics (Recall@K, Precision@K, MRR)
+```
+
+### Metrics Implemented
+- **Recall@K**: Proportion of expected relevant target chunks retrieved in the top K positions.
+- **Precision@K**: Proportion of retrieved chunks in top K that match expected targets.
+- **Mean Reciprocal Rank (MRR)**: Evaluates the rank of the first relevant retrieved chunk across all queries ($1 / \text{rank}^*$).
+
+### Dataset Schema
+Datasets can be formatted as standard JSON or JSON Lines (`.jsonl`). Each evaluation case defines:
+- `question`: Natural language test question.
+- `expected_answer`: Ground truth answer string.
+- `expected_facts`: Key factual statements expected in the answer.
+- `expected_sources`: Source document filenames, paths, or document titles.
+- `expected_chunks`: Verifiable chunk text snippets, hashes, or UUIDs.
+
+Example:
+```json
+{
+  "name": "ragforge_retrieval_benchmark",
+  "cases": [
+    {
+      "id": "case_1",
+      "question": "What is the primary LLM provider used by RAGForge?",
+      "expected_answer": "RAGForge uses Groq as its primary LLM provider.",
+      "expected_sources": ["ragforge_test.md"],
+      "expected_chunks": ["RAGForge uses Groq as its primary LLM provider"]
+    }
+  ]
+}
+```
+
+### Evaluation CLI Command
+
+Evaluate retrieval against an evaluation dataset:
+
+```bash
+# Offline evaluation with in-memory store and on-the-fly indexing:
+uv run ragforge evaluate retrieval test_documents/retrieval_eval_dataset.json --in-memory --index-path test_documents/ragforge_test.md
+
+# Evaluate against an existing Qdrant collection:
+uv run ragforge evaluate retrieval test_documents/retrieval_eval_dataset.json --collection ragforge_chunks
+
+# Export results as JSON:
+uv run ragforge evaluate retrieval test_documents/retrieval_eval_dataset.json --in-memory --index-path test_documents/ragforge_test.md --json
+```
+
+Example Output:
+```
+======================================================
+ RAGFORGE RETRIEVAL EVALUATION REPORT
+======================================================
+ Dataset:      test_documents/retrieval_eval_dataset.json
+ Provider:     deterministic
+ Store:        in-memory
+ Duration:     0.0014s
+------------------------------------------------------
+Evaluation Report
+-----------------
+Cases: 5
+Recall@1: 1.0000
+Recall@3: 1.0000
+Recall@5: 1.0000
+Precision@5: 0.2400
+MRR: 1.0000
+======================================================
+```
+
 ---
 
 ## Configuration & Environment Variables

@@ -1,0 +1,85 @@
+{
+  "name": "ragforge_retrieval_test_kb",
+  "description": "Deterministic retrieval evaluation benchmark for the RAGForge test knowledge base (ragforge_test.md).",
+  "cases": [
+    {
+      "id": "case_1_primary_llm",
+      "question": "What is the primary LLM provider used by RAGForge?",
+      "expected_answer": "RAGForge uses Groq as its primary LLM provider.",
+      "expected_facts": [
+        "Groq",
+        "primary LLM provider"
+      ],
+      "expected_sources": [
+        "ragforge_test.md"
+      ],
+      "expected_chunks": [
+        "RAGForge uses Groq as its primary LLM provider"
+      ]
+    },
+    {
+      "id": "case_2_vector_store",
+      "question": "What vector database does RAGForge use to store embeddings?",
+      "expected_answer": "RAGForge uses Qdrant as its vector database.",
+      "expected_facts": [
+        "Qdrant",
+        "vector database"
+      ],
+      "expected_sources": [
+        "ragforge_test.md"
+      ],
+      "expected_chunks": [
+        "The project uses FastAPI as its API framework, Qdrant as its vector database"
+      ]
+    },
+    {
+      "id": "case_3_fallback_provider",
+      "question": "When is OpenAI used as a fallback provider in RAGForge?",
+      "expected_answer": "OpenAI is configured as a fallback provider when Groq encounters a fallback-eligible transient failure such as a timeout, rate limit, or temporary provider unavailability.",
+      "expected_facts": [
+        "OpenAI",
+        "fallback provider",
+        "timeout",
+        "rate limit",
+        "temporary provider unavailability"
+      ],
+      "expected_sources": [
+        "ragforge_test.md"
+      ],
+      "expected_chunks": [
+        "OpenAI is configured as a fallback provider when Groq encounters a fallback-eligible transient failure"
+      ]
+    },
+    {
+      "id": "case_4_testing_stack",
+      "question": "What tools are used for testing, linting, and type checking in RAGForge?",
+      "expected_answer": "RAGForge uses pytest for automated testing, Ruff for linting and formatting, and mypy for static type checking.",
+      "expected_facts": [
+        "pytest",
+        "Ruff",
+        "mypy"
+      ],
+      "expected_sources": [
+        "ragforge_test.md"
+      ],
+      "expected_chunks": [
+        "RAGForge uses pytest for automated testing, Ruff for linting and formatting, and mypy for static type checking"
+      ]
+    },
+    {
+      "id": "case_5_api_key_security",
+      "question": "Where are API keys stored in RAGForge for security?",
+      "expected_answer": "API keys are stored in environment variables and must never be committed to the Git repository.",
+      "expected_facts": [
+        "environment variables",
+        "never be committed to the Git repository"
+      ],
+      "expected_sources": [
+        "ragforge_test.md"
+      ],
+      "expected_chunks": [
+        "API keys are stored in environment variables and must never be committed to the Git repository"
+      ]
+    }
+  ]
+}
