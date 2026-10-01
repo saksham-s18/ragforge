@@ -1,5 +1,6 @@
 """Application orchestration services."""
 
+from ragforge.services.evaluation import EvaluationRunner, RetrievalEvaluationService
 from ragforge.services.indexing import IndexingService, discover_documents
 from ragforge.services.llm_router import LLMRouter
 from ragforge.services.prompt import (
@@ -13,10 +14,12 @@ from ragforge.services.retrieval import RetrievalService
 
 __all__ = [
     "DEFAULT_RAG_SYSTEM_PROMPT",
+    "EvaluationRunner",
     "IndexingService",
     "LLMRouter",
     "PromptBuilder",
     "RAGGenerationService",
+    "RetrievalEvaluationService",
     "RetrievalService",
     "build_rag_user_prompt",
     "discover_documents",

@@ -131,3 +131,11 @@ class AllLLMProvidersFailedError(LLMError):
 
 class RAGGenerationError(RAGForgeError):
     """Raised when RAG generation pipeline encounters an error."""
+
+
+class EvaluationError(RAGForgeError):
+    """Base exception for evaluation-related errors."""
+
+
+class DatasetValidationError(EvaluationError):
+    """Raised when an evaluation dataset fails validation or parsing."""
