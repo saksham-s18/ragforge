@@ -240,10 +240,12 @@ def test_get_rag_service_injects_deterministic_reranker() -> None:
     from ragforge.adapters.rerankers import DeterministicReranker
 
     settings = Settings(
+        groq_api_key="gsk_test_mock_key_12345",
         reranking_enabled=True,
         reranker_provider="deterministic",
         rerank_candidate_k=30,
         rerank_top_k=7,
+        _env_file=None,
     )
     rag_service = get_rag_service(settings=settings)
     assert rag_service._reranker is not None
@@ -251,6 +253,19 @@ def test_get_rag_service_injects_deterministic_reranker() -> None:
     assert rag_service._reranking_enabled is True
     assert rag_service._candidate_k == 30
     assert rag_service._default_top_k == 7
+
+
+def test_get_rag_service_no_reranker_when_disabled() -> None:
+    """Verify get_rag_service does not configure a reranker when reranking is disabled."""
+    settings = Settings(
+        groq_api_key="gsk_test_mock_key_12345",
+        reranking_enabled=False,
+        _env_file=None,
+    )
+    rag_service = get_rag_service(settings=settings)
+    assert rag_service._reranker is None
+    assert rag_service._reranking_enabled is False
+    assert rag_service._default_top_k == 5
 
 
 @pytest.mark.asyncio
