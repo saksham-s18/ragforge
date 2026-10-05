@@ -52,8 +52,11 @@ class EvaluationRunner:
             candidate_k: Optional candidate retrieval depth before reranking.
 
         Raises:
-            ValueError: If k_values contains non-positive numbers or is empty.
+            ValueError: If k_values contains non-positive numbers or is empty,
+                or candidate_k is non-positive.
         """
+        if candidate_k is not None and candidate_k <= 0:
+            raise ValueError(f"candidate_k must be positive, got {candidate_k}")
         self._retrieval_service = retrieval_service
         self._reranker = reranker
         self._candidate_k = candidate_k

@@ -373,3 +373,16 @@ async def test_runner_evaluates_dataset_with_reranker() -> None:
     assert report.total_cases == 2
     assert report.mean_reciprocal_rank > 0.0
     assert 1 in report.mean_recall_at_k
+
+
+def test_evaluation_runner_rejects_non_positive_candidate_k() -> None:
+    """Verify EvaluationRunner raises ValueError when candidate_k is non-positive."""
+    provider = DeterministicEmbeddingProvider(dimension=16)
+    store = InMemoryVectorStore(dimension=16)
+    retrieval_service = RetrievalService(provider, store)
+
+    with pytest.raises(ValueError, match="candidate_k must be positive, got 0"):
+        EvaluationRunner(retrieval_service=retrieval_service, candidate_k=0)
+
+    with pytest.raises(ValueError, match="candidate_k must be positive, got -5"):
+        EvaluationRunner(retrieval_service=retrieval_service, candidate_k=-5)

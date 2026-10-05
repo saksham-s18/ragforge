@@ -2,7 +2,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ragforge.adapters.embeddings import (
     DeterministicEmbeddingProvider,
@@ -42,11 +42,13 @@ class QueryRequest(BaseModel):
         description="User question to answer against indexed document context",
         min_length=1,
     )
-    top_k: int = Field(
-        default=5,
+    top_k: int | None = Field(
+        default=None,
         ge=1,
         le=50,
-        description="Number of nearest chunks to retrieve for context",
+        description=(
+            "Number of nearest chunks to retrieve for context (defaults to server configuration)"
+        ),
     )
     candidate_k: int | None = Field(
         default=None,
@@ -60,6 +62,18 @@ class QueryRequest(BaseModel):
         le=1.0,
         description="Optional minimum cosine similarity cutoff for context chunks",
     )
+
+    @model_validator(mode="after")
+    def _validate_candidate_k_ge_top_k(self) -> "QueryRequest":
+        if (
+            self.candidate_k is not None
+            and self.top_k is not None
+            and self.candidate_k < self.top_k
+        ):
+            raise ValueError(
+                f"candidate_k ({self.candidate_k}) cannot be smaller than top_k ({self.top_k})."
+            )
+        return self
 
 
 class QueryResponse(BaseModel):
