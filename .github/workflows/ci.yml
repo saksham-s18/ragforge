@@ -3,11 +3,11 @@ name: RAGForge CI
 on:
   push:
     branches:
-      - main
-      - 'feat/**'
+      - dev
+      - 'feature/**'
   pull_request:
     branches:
-      - main
+      - dev
 
 jobs:
   ci:
