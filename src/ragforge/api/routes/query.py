@@ -9,6 +9,7 @@ from ragforge.adapters.embeddings import (
     FastEmbedProvider,
 )
 from ragforge.adapters.llm import GroqLLMProvider, OpenAILLMProvider
+from ragforge.adapters.rerankers import DeterministicReranker
 from ragforge.adapters.vector_stores import QdrantVectorStore
 from ragforge.core.config import Settings, get_settings
 from ragforge.domain.exceptions import (
@@ -23,6 +24,7 @@ from ragforge.domain.exceptions import (
 from ragforge.domain.models import SourceReference
 from ragforge.ports.embeddings import BaseEmbeddingProvider
 from ragforge.ports.llm import BaseLLMProvider
+from ragforge.ports.reranker import BaseReranker
 from ragforge.services.llm_router import LLMRouter
 from ragforge.services.rag import RAGGenerationService
 from ragforge.services.retrieval import RetrievalService
@@ -45,6 +47,12 @@ class QueryRequest(BaseModel):
         ge=1,
         le=50,
         description="Number of nearest chunks to retrieve for context",
+    )
+    candidate_k: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Optional candidate retrieval count before reranking",
     )
     score_threshold: float | None = Field(
         default=None,
@@ -129,7 +137,19 @@ def get_rag_service(
             timeout=settings.llm_timeout,
         )
 
-    # 5. Router and RAG Service
+    # 5. Optional Reranker
+    reranker: BaseReranker | None = None
+    if settings.reranking_enabled:
+        if settings.reranker_provider == "deterministic":
+            reranker = DeterministicReranker()
+        else:
+            logger.warning(
+                "Unknown reranker provider '%s'; falling back to deterministic",
+                settings.reranker_provider,
+            )
+            reranker = DeterministicReranker()
+
+    # 6. Router and RAG Service
     llm_router = LLMRouter(
         primary_provider=primary_provider,
         fallback_provider=fallback_provider,
@@ -137,7 +157,10 @@ def get_rag_service(
     return RAGGenerationService(
         retrieval_service=retrieval_service,
         llm_router=llm_router,
-        default_top_k=5,
+        reranker=reranker,
+        reranking_enabled=settings.reranking_enabled,
+        candidate_k=settings.rerank_candidate_k,
+        default_top_k=settings.rerank_top_k if settings.reranking_enabled else 5,
         default_temperature=settings.llm_temperature,
         default_max_tokens=settings.llm_max_tokens,
     )
@@ -164,6 +187,7 @@ async def query_documents(
         rag_response = await rag_service.generate_answer(
             question=payload.question,
             top_k=payload.top_k,
+            candidate_k=payload.candidate_k,
             score_threshold=payload.score_threshold,
         )
         return QueryResponse(

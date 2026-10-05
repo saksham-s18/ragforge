@@ -133,6 +133,10 @@ class RAGGenerationError(RAGForgeError):
     """Raised when RAG generation pipeline encounters an error."""
 
 
+class RerankingError(RAGForgeError):
+    """Raised when retrieval reranking fails."""
+
+
 class EvaluationError(RAGForgeError):
     """Base exception for evaluation-related errors."""
 

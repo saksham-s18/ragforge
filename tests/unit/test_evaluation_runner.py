@@ -5,6 +5,7 @@ from uuid import UUID
 import pytest
 
 from ragforge.adapters.embeddings import DeterministicEmbeddingProvider
+from ragforge.adapters.rerankers import DeterministicReranker
 from ragforge.adapters.vector_stores import InMemoryVectorStore
 from ragforge.domain.exceptions import DatasetValidationError
 from ragforge.domain.models import (
@@ -300,3 +301,75 @@ def test_retrieval_evaluation_report_formatting() -> None:
     assert "Precision@5: 0.2000" in formatted
     assert "MRR: 1.0000" in formatted
     assert report.mrr == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Evaluation Runner Reranker Integration (Stage 10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_runner_with_deterministic_reranker() -> None:
+    """Verify EvaluationRunner executes second-stage reranking when reranker is configured."""
+    provider = DeterministicEmbeddingProvider(dimension=16)
+    store = InMemoryVectorStore(dimension=16)
+    retrieval_service = RetrievalService(provider, store)
+
+    chunks = _create_mock_chunks()
+    await retrieval_service.index_chunks(chunks)
+
+    reranker = DeterministicReranker()
+    runner = EvaluationRunner(
+        retrieval_service=retrieval_service,
+        k_values=[1, 2],
+        reranker=reranker,
+        candidate_k=10,
+    )
+
+    case = EvaluationCase(
+        question="Which open-source vector similarity search engine is used?",
+        expected_sources=["/docs/fastapi.md"],
+        expected_chunks=["Qdrant is an open-source vector similarity search engine."],
+    )
+
+    res = await runner.evaluate_case(case)
+    # The chunk mentioning Qdrant should be rank 1 due to high lexical match with question
+    assert res.first_relevant_rank == 1
+    assert res.recall_at_k[1] == 1.0
+    assert res.precision_at_k[1] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_runner_evaluates_dataset_with_reranker() -> None:
+    """Verify full dataset batch evaluation with reranker producing valid report."""
+    provider = DeterministicEmbeddingProvider(dimension=16)
+    store = InMemoryVectorStore(dimension=16)
+    retrieval_service = RetrievalService(provider, store)
+
+    chunks = _create_mock_chunks()
+    await retrieval_service.index_chunks(chunks)
+
+    runner = EvaluationRunner(
+        retrieval_service=retrieval_service,
+        k_values=[1, 3],
+        reranker=DeterministicReranker(),
+    )
+
+    dataset = EvaluationDataset(
+        name="rerank_test_suite",
+        cases=[
+            EvaluationCase(
+                question="What is FastAPI?",
+                expected_sources=["/docs/fastapi.md"],
+            ),
+            EvaluationCase(
+                question="Vector search engine",
+                expected_sources=["/docs/fastapi.md"],
+            ),
+        ],
+    )
+
+    report = await runner.evaluate_dataset(dataset)
+    assert report.total_cases == 2
+    assert report.mean_reciprocal_rank > 0.0
+    assert 1 in report.mean_recall_at_k

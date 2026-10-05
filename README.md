@@ -7,11 +7,13 @@ RAGForge is a production-oriented Agentic Retrieval-Augmented Generation (RAG) p
 ```
 User Question
       ↓
-RetrievalService (Query Embedding + Similarity Search)
+RetrievalService (Candidate Generation: Query Embedding + Vector Search, top_k = candidate_k)
       ↓
-Qdrant Vector Database
+Candidate Retrieved Chunks (Initial Vector Similarity Scores)
       ↓
-Retrieved Chunks & Metadata Provenance
+Reranker Layer (BaseReranker: Deterministic Lexical Scoring / Cross-Encoder)
+      ↓
+Top-K Ranked Chunks (Relevance Re-scoring & Provenance Preserved, top_k = final_k)
       ↓
 Deterministic Context & Prompt Construction (PromptBuilder)
       ↓
@@ -159,6 +161,36 @@ MRR: 1.0000
 
 ---
 
+## Retrieval Reranking (Stage 10)
+
+RAGForge implements a two-stage retrieval architecture decoupling initial candidate generation from final context selection:
+
+1. **Why Reranking Exists**:
+   - Initial vector search (bi-encoder dense retrieval) is fast and effective at identifying a broad candidate pool ($K = 20$). However, dense vector embeddings can exhibit semantic blindness toward exact keyword matches, domain codes, or subtle query phrasing.
+   - Second-stage reranking evaluates candidate chunks with higher precision, placing the most relevant evidence at the top ranks ($K = 5$) before prompt assembly.
+
+2. **Candidate Retrieval vs. Final Selection**:
+   - **Candidate Retrieval (`candidate_k`)**: `RetrievalService` retrieves an expanded candidate pool (default: 20) from the vector store.
+   - **Reranker Scoring**: `BaseReranker` scores each candidate against the query.
+   - **Final Context Selection (`top_k`)**: The top $K$ reranked chunks (default: 5) are selected for `PromptBuilder` and LLM answer synthesis.
+
+3. **Deterministic Lexical Reranker (`DeterministicReranker`)**:
+   - Built-in, reproducible reranker operating completely offline with zero network or external API requirements.
+   - Calculates lexical relevance using:
+     - **Query Term Overlap**: Fraction of unique query tokens present in chunk text.
+     - **Term Frequency**: Capped term frequency score reflecting keyword salience.
+     - **Exact Phrase Matching**: Bonus for matching the contiguous query phrase.
+     - **Deterministic Tie-Breaking**: Breaks ties deterministically via initial vector score, original rank, and chunk UUID.
+
+4. **Provenance Preservation**:
+   - Original vector retrieval scores (`score`) and all chunk metadata (document IDs, section headers, character offsets) are strictly preserved.
+   - Second-stage relevance score is stored separately as `rerank_score`.
+
+5. **Production Extension Points**:
+   - The clean `BaseReranker` port abstraction enables drop-in neural cross-encoders (such as BGE Reranker, Cohere, or ColBERT) without modifying core retrieval services.
+
+---
+
 ## Configuration & Environment Variables
 
 Configure RAGForge via `.env` or system environment variables:
@@ -176,6 +208,10 @@ Configure RAGForge via `.env` or system environment variables:
 | `RAGFORGE_LLM_TIMEOUT` | `30.0` | Request timeout in seconds for upstream LLM calls |
 | `RAGFORGE_QDRANT_URL` | `http://localhost:6333` | Endpoint for Qdrant vector database |
 | `RAGFORGE_QDRANT_COLLECTION` | `ragforge_chunks` | Collection name for chunk vector index |
+| `RAGFORGE_RERANKING_ENABLED` | `false` | Whether second-stage reranking is enabled |
+| `RAGFORGE_RERANKER_PROVIDER` | `deterministic` | Reranker provider identifier (`deterministic`) |
+| `RAGFORGE_RERANK_CANDIDATE_K` | `20` | Candidate chunk retrieval depth before reranking |
+| `RAGFORGE_RERANK_TOP_K` | `5` | Final top reranked chunks selected for LLM context |
 
 ---
 
