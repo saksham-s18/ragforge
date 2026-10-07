@@ -64,6 +64,8 @@ class RetrievedChunk(BaseModel):
     score: float
     retrieval_type: str = "dense"
     rank: int
+    dense_score: float | None = None
+    lexical_score: float | None = None
 
 
 class Citation(BaseModel):

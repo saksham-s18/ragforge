@@ -2,6 +2,8 @@
 
 from ragforge.ports.chunkers import BaseChunker
 from ragforge.ports.embeddings import BaseEmbeddingProvider
+from ragforge.ports.fusion import BaseScoreFusion
+from ragforge.ports.lexical import BaseLexicalIndex
 from ragforge.ports.llm import BaseLLMProvider
 from ragforge.ports.loaders import BaseDocumentLoader
 from ragforge.ports.state import BaseIndexStateStore
@@ -13,5 +15,7 @@ __all__ = [
     "BaseEmbeddingProvider",
     "BaseIndexStateStore",
     "BaseLLMProvider",
+    "BaseLexicalIndex",
+    "BaseScoreFusion",
     "BaseVectorStore",
 ]
