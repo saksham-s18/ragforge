@@ -8,6 +8,8 @@ from ragforge.adapters.embeddings import (
     DeterministicEmbeddingProvider,
     FastEmbedProvider,
 )
+from ragforge.adapters.fusion import ReciprocalRankFusion
+from ragforge.adapters.lexical import BM25LexicalIndex
 from ragforge.adapters.llm import (
     DEFAULT_GROQ_MODEL,
     DEFAULT_OPENAI_MODEL,
@@ -30,6 +32,7 @@ from ragforge.adapters.vector_stores import (
 )
 
 __all__ = [
+    "BM25LexicalIndex",
     "BaseFileLoader",
     "DEFAULT_GROQ_MODEL",
     "DEFAULT_OPENAI_MODEL",
@@ -43,6 +46,7 @@ __all__ = [
     "MarkdownDocumentLoader",
     "OpenAILLMProvider",
     "QdrantVectorStore",
+    "ReciprocalRankFusion",
     "TextDocumentLoader",
     "approximate_token_count",
     "generate_document_id",
