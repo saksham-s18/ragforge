@@ -28,6 +28,7 @@ from ragforge.domain.models import (
 )
 from ragforge.ports.chunkers import BaseChunker
 from ragforge.ports.embeddings import BaseEmbeddingProvider
+from ragforge.ports.lexical import BaseLexicalIndex
 from ragforge.ports.loaders import BaseDocumentLoader
 from ragforge.ports.state import BaseIndexStateStore
 from ragforge.ports.vector_store import BaseVectorStore
@@ -106,6 +107,7 @@ class IndexingService:
         loaders: dict[str, BaseDocumentLoader] | None = None,
         state_store: BaseIndexStateStore | None = None,
         batch_size: int = 32,
+        lexical_index: BaseLexicalIndex | None = None,
     ) -> None:
         """Initialize the indexing service.
 
@@ -116,6 +118,7 @@ class IndexingService:
             loaders: Mapping of extension to loader adapters.
             state_store: State persistence adapter (defaults to InMemoryIndexStateStore).
             batch_size: Batch size for embedding and upsert operations (must be > 0).
+            lexical_index: Optional lexical index adapter for hybrid/BM25 retrieval.
 
         Raises:
             ValueError: If batch_size <= 0.
@@ -128,6 +131,7 @@ class IndexingService:
         self._chunker = chunker or DeterministicChunker()
         self._state_store = state_store or InMemoryIndexStateStore()
         self._batch_size = batch_size
+        self._lexical_index = lexical_index
 
         if loaders is not None:
             self._loaders = loaders
@@ -388,18 +392,41 @@ class IndexingService:
                 for chunk, vec in zip(batch_chunks, vectors, strict=True):
                     chunk.dense_vector = vec
 
-        # Phase 3: Vector Store Upsert & Safe Stale Chunk Removal
-        # Upsert chunks into vector store FIRST in batches
+        # Phase 3: Vector Store Upsert & Lexical Index Synchronization
         if all_chunks:
+            # 1. Upsert chunks into vector store in batches
             for i in range(0, len(all_chunks), self._batch_size):
                 batch_chunks = all_chunks[i : i + self._batch_size]
                 await self._vector_store.upsert(batch_chunks)
             vectors_upserted_count = len(all_chunks)
 
-        # Remove stale chunks for updated documents ONLY after new upsert succeeds
+            # 2. Upsert chunks into lexical index
+            if self._lexical_index is not None:
+                try:
+                    await self._lexical_index.index_chunks(all_chunks)
+                except Exception as exc:
+                    logger.error(
+                        "Lexical indexing failed after vector upsert: %s. Attempting rollback.",
+                        exc,
+                    )
+                    # Attempt best-effort rollback of newly upserted chunks from vector store
+                    for p in prepared_docs:
+                        try:
+                            await self._vector_store.delete_by_document_id(p.doc.id)
+                        except Exception as rb_exc:
+                            logger.error(
+                                "Rollback failed for document %s in vector store: %s",
+                                p.doc.id,
+                                rb_exc,
+                            )
+                    raise
+
+        # Remove stale chunks for updated documents ONLY after both new upserts succeed
         for p in prepared_docs:
             if p.is_update and p.old_document_id is not None and p.old_document_id != p.doc.id:
                 await self._vector_store.delete_by_document_id(p.old_document_id)
+                if self._lexical_index is not None:
+                    await self._lexical_index.delete_by_document_id(p.old_document_id)
 
         # Phase 4: State Store Updates and Reporting
         for p in prepared_docs:
@@ -467,3 +494,28 @@ class IndexingService:
             documents=doc_results,
             errors=error_messages,
         )
+
+    async def delete_document(self, path: str | Path) -> bool:
+        """Remove a document from the vector store, lexical index, and state store.
+
+        Args:
+            path: Path to the document file to delete.
+
+        Returns:
+            True if document was found in state store and deleted, False otherwise.
+        """
+        resolved_path = str(Path(path).resolve())
+        record = await self._state_store.get(resolved_path)
+        if record is None:
+            return False
+
+        await self._vector_store.delete_by_document_id(record.document_id)
+        if self._lexical_index is not None:
+            await self._lexical_index.delete_by_document_id(record.document_id)
+        await self._state_store.delete(resolved_path)
+        logger.info(
+            "Deleted document %s (id: %s) from all stores",
+            resolved_path,
+            record.document_id,
+        )
+        return True

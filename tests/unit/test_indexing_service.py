@@ -4,6 +4,7 @@ import pytest
 
 from ragforge.adapters.chunkers import DeterministicChunker
 from ragforge.adapters.embeddings import DeterministicEmbeddingProvider
+from ragforge.adapters.lexical import BM25LexicalIndex
 from ragforge.adapters.state import InMemoryIndexStateStore
 from ragforge.adapters.vector_stores import InMemoryVectorStore
 from ragforge.domain.enums import IndexingStatus
@@ -641,3 +642,239 @@ async def test_safe_update_order_successful_update_replaces_vectors(
     record = await state.get(str(doc_file.resolve()))
     assert record is not None
     assert record.document_id == v2_doc_id
+
+
+# ---------------------------------------------------------------------------
+# Stage 11 Step 3: Hybrid Indexing Synchronization Tests (20 to 26 + delete)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def hybrid_pipeline() -> tuple[
+    IndexingService, InMemoryVectorStore, BM25LexicalIndex, InMemoryIndexStateStore
+]:
+    dim = 16
+    provider = DeterministicEmbeddingProvider(dimension=dim)
+    store = InMemoryVectorStore(dimension=dim)
+    lexical = BM25LexicalIndex()
+    state = InMemoryIndexStateStore()
+    chunker = DeterministicChunker(chunk_size=100, chunk_overlap=20)
+    service = IndexingService(
+        embedding_provider=provider,
+        vector_store=store,
+        chunker=chunker,
+        state_store=state,
+        batch_size=4,
+        lexical_index=lexical,
+    )
+    return service, store, lexical, state
+
+
+@pytest.mark.asyncio
+async def test_hybrid_indexing_new_document_indexes_both_stores(
+    hybrid_pipeline: tuple[
+        IndexingService, InMemoryVectorStore, BM25LexicalIndex, InMemoryIndexStateStore
+    ],
+    tmp_path: Path,
+) -> None:
+    """20. Verify new document indexes both vector store and lexical index."""
+    service, store, lexical, state = hybrid_pipeline
+    doc_file = tmp_path / "new_doc.txt"
+    doc_file.write_text("Unique terminology for indexing test.", encoding="utf-8")
+
+    result = await service.index_path(doc_file)
+    assert result.indexed_documents == 1
+    assert result.chunks_created >= 1
+    assert store.count() == result.chunks_created
+    assert lexical.count() == result.chunks_created
+
+    # Verify document is searchable in lexical index
+    lex_results = await lexical.search("terminology")
+    assert len(lex_results) >= 1
+
+    # Verify state store has the record
+    record = await state.get(str(doc_file.resolve()))
+    assert record is not None
+    assert record.chunk_count == result.chunks_created
+
+
+@pytest.mark.asyncio
+async def test_hybrid_indexing_unchanged_document_skips_both_stores(
+    hybrid_pipeline: tuple[
+        IndexingService, InMemoryVectorStore, BM25LexicalIndex, InMemoryIndexStateStore
+    ],
+    tmp_path: Path,
+) -> None:
+    """21. Verify unchanged document skips both stores."""
+    service, store, lexical, _ = hybrid_pipeline
+    doc_file = tmp_path / "unchanged.txt"
+    doc_file.write_text("Constant static content that does not change.", encoding="utf-8")
+
+    res1 = await service.index_path(doc_file)
+    assert res1.indexed_documents == 1
+    initial_store_count = store.count()
+    initial_lex_count = lexical.count()
+
+    res2 = await service.index_path(doc_file)
+    assert res2.skipped_documents == 1
+    assert res2.indexed_documents == 0
+    assert store.count() == initial_store_count
+    assert lexical.count() == initial_lex_count
+
+
+@pytest.mark.asyncio
+async def test_hybrid_indexing_changed_document_updates_both_stores(
+    hybrid_pipeline: tuple[
+        IndexingService, InMemoryVectorStore, BM25LexicalIndex, InMemoryIndexStateStore
+    ],
+    tmp_path: Path,
+) -> None:
+    """22. Verify changed document updates both stores and old terms disappear."""
+    service, store, lexical, state = hybrid_pipeline
+    doc_file = tmp_path / "mutate.txt"
+    doc_file.write_text("Alpha zebra original content.", encoding="utf-8")
+
+    await service.index_path(doc_file)
+    assert len(await lexical.search("zebra")) >= 1
+
+    # Update document with new content
+    doc_file.write_text("Beta giraffe revised updated content.", encoding="utf-8")
+    res2 = await service.index_path(doc_file)
+    assert res2.updated_documents == 1
+
+    # Old term 'zebra' should not match, new term 'giraffe' should match
+    assert len(await lexical.search("zebra")) == 0
+    assert len(await lexical.search("giraffe")) >= 1
+
+    # Vector store count matches new chunk count
+    assert store.count() == res2.chunks_created
+    assert lexical.count() == res2.chunks_created
+
+
+@pytest.mark.asyncio
+async def test_hybrid_indexing_stale_chunks_removed_from_both_stores(
+    hybrid_pipeline: tuple[
+        IndexingService, InMemoryVectorStore, BM25LexicalIndex, InMemoryIndexStateStore
+    ],
+    tmp_path: Path,
+) -> None:
+    """23. Verify stale chunks are removed from both stores when chunk count decreases."""
+    service, store, lexical, _ = hybrid_pipeline
+    doc_file = tmp_path / "stale_hybrid.txt"
+
+    # Multi-chunk document
+    paragraph = "Sentence with enough length to create multiple distinct chunks. " * 8
+    doc_file.write_text(f"P1: {paragraph}\n\nP2: {paragraph}", encoding="utf-8")
+
+    res1 = await service.index_path(doc_file)
+    assert res1.chunks_created >= 2
+    assert store.count() == res1.chunks_created
+    assert lexical.count() == res1.chunks_created
+
+    # Replace with single chunk document
+    doc_file.write_text("Short single sentence.", encoding="utf-8")
+    res2 = await service.index_path(doc_file)
+    assert res2.updated_documents == 1
+    assert res2.chunks_created == 1
+
+    assert store.count() == 1
+    assert lexical.count() == 1
+
+
+@pytest.mark.asyncio
+async def test_hybrid_indexing_force_refreshes_both_stores(
+    hybrid_pipeline: tuple[
+        IndexingService, InMemoryVectorStore, BM25LexicalIndex, InMemoryIndexStateStore
+    ],
+    tmp_path: Path,
+) -> None:
+    """24. Verify force indexing refreshes both vector and lexical stores."""
+    service, store, lexical, _ = hybrid_pipeline
+    doc_file = tmp_path / "force_test.txt"
+    doc_file.write_text("Document to force reindex.", encoding="utf-8")
+
+    await service.index_path(doc_file)
+    assert store.count() >= 1
+    assert lexical.count() >= 1
+
+    res_force = await service.index_path(doc_file, force=True)
+    assert res_force.updated_documents == 1
+    assert res_force.skipped_documents == 0
+    assert store.count() == res_force.chunks_created
+    assert lexical.count() == res_force.chunks_created
+
+
+@pytest.mark.asyncio
+async def test_hybrid_indexing_failure_not_silently_swallowed(
+    hybrid_pipeline: tuple[
+        IndexingService, InMemoryVectorStore, BM25LexicalIndex, InMemoryIndexStateStore
+    ],
+    tmp_path: Path,
+) -> None:
+    """25. Verify lexical indexing failure raises exception and is not silently swallowed."""
+    service, _, lexical, _ = hybrid_pipeline
+    doc_file = tmp_path / "fail_doc.txt"
+    doc_file.write_text("Testing error propagation.", encoding="utf-8")
+
+    async def failing_index_chunks(chunks: list) -> None:
+        raise RuntimeError("Lexical store IO error")
+
+    lexical.index_chunks = failing_index_chunks  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="Lexical store IO error"):
+        await service.index_path(doc_file)
+
+
+@pytest.mark.asyncio
+async def test_hybrid_indexing_state_not_persisted_on_unsuccessful_sync(
+    hybrid_pipeline: tuple[
+        IndexingService, InMemoryVectorStore, BM25LexicalIndex, InMemoryIndexStateStore
+    ],
+    tmp_path: Path,
+) -> None:
+    """26. Verify state is NOT persisted when lexical indexing fails, and rollback is attempted."""
+    service, store, lexical, state = hybrid_pipeline
+    doc_file = tmp_path / "rollback_doc.txt"
+    doc_file.write_text("Content that fails during lexical indexing.", encoding="utf-8")
+
+    async def failing_index_chunks(chunks: list) -> None:
+        raise RuntimeError("Disk full in lexical index")
+
+    lexical.index_chunks = failing_index_chunks  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="Disk full in lexical index"):
+        await service.index_path(doc_file)
+
+    # State store must have NO record of this document
+    record = await state.get(str(doc_file.resolve()))
+    assert record is None
+
+    # Rollback must have deleted the newly upserted chunks from vector store
+    assert store.count() == 0
+
+
+@pytest.mark.asyncio
+async def test_hybrid_indexing_delete_document_removes_from_all_stores(
+    hybrid_pipeline: tuple[
+        IndexingService, InMemoryVectorStore, BM25LexicalIndex, InMemoryIndexStateStore
+    ],
+    tmp_path: Path,
+) -> None:
+    """27. Verify delete_document purges document from vector store, lexical index, and state."""
+    service, store, lexical, state = hybrid_pipeline
+    doc_file = tmp_path / "to_delete.txt"
+    doc_file.write_text("Content to be deleted.", encoding="utf-8")
+
+    await service.index_path(doc_file)
+    assert store.count() >= 1
+    assert lexical.count() >= 1
+    assert await state.get(str(doc_file.resolve())) is not None
+
+    deleted = await service.delete_document(doc_file)
+    assert deleted is True
+    assert store.count() == 0
+    assert lexical.count() == 0
+    assert await state.get(str(doc_file.resolve())) is None
+
+    # Deleting again returns False
+    assert await service.delete_document(doc_file) is False
