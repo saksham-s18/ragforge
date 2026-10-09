@@ -20,6 +20,7 @@ from ragforge.adapters.loaders import (
     TextDocumentLoader,
     generate_document_id,
 )
+from ragforge.adapters.rerankers import DeterministicReranker
 from ragforge.adapters.state import (
     InMemoryIndexStateStore,
     JsonFileIndexStateStore,
@@ -35,6 +36,7 @@ __all__ = [
     "DEFAULT_OPENAI_MODEL",
     "DeterministicChunker",
     "DeterministicEmbeddingProvider",
+    "DeterministicReranker",
     "FastEmbedProvider",
     "GroqLLMProvider",
     "InMemoryIndexStateStore",

@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from ragforge.adapters.rerankers import DeterministicReranker
 from ragforge.domain.models import (
     Chunk,
     ChunkMetadata,
@@ -266,3 +267,133 @@ async def test_rag_service_rejects_empty_question() -> None:
         await rag_service.generate_answer(question="   ")
 
     assert "empty" in str(exc_info.value).lower()
+
+
+# ---------------------------------------------------------------------------
+# Reranking Integration Tests (Stage 10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rag_service_with_reranking_enabled() -> None:
+    """Verify that RAG generation uses candidate_k for retrieval, reranks candidates,
+    constructs prompt with reranked items, and reports rerank metadata."""
+    c1 = make_retrieved_chunk(
+        content="General database information and unstructured text storage.",
+        score=0.91,
+        rank=1,
+    )
+    c2 = make_retrieved_chunk(
+        content="Qdrant vector database is optimized for dense similarity search.",
+        score=0.79,
+        rank=2,
+    )
+
+    mock_retrieval = AsyncMock(spec=RetrievalService)
+    mock_retrieval.retrieve.return_value = [c1, c2]
+
+    llm_provider = MockLLMProvider(answer_text="Qdrant handles dense search.")
+    router = LLMRouter(primary_provider=llm_provider)
+
+    reranker = DeterministicReranker()
+    rag_service = RAGGenerationService(
+        retrieval_service=mock_retrieval,
+        llm_router=router,
+        reranker=reranker,
+        candidate_k=15,
+        default_top_k=2,
+    )
+
+    result = await rag_service.generate_answer(
+        question="How does Qdrant vector database work?",
+        top_k=2,
+    )
+
+    # Retrieval should be called with candidate_k (15)
+    mock_retrieval.retrieve.assert_awaited_once_with(
+        query="How does Qdrant vector database work?",
+        top_k=15,
+        filters=None,
+        score_threshold=None,
+    )
+
+    # Context should have c2 first because of exact keyword match
+    assert llm_provider.last_request is not None
+    prompt = llm_provider.last_request.prompt
+    assert prompt.find("Qdrant vector database") < prompt.find("General database")
+
+    # Sources should be reordered and retain both original score and rerank_score
+    assert len(result.sources) == 2
+    assert result.sources[0].chunk_id == c2.chunk.id
+    assert result.sources[0].score == 0.79  # Original vector score preserved
+    assert result.sources[0].rerank_score is not None
+    assert result.sources[0].rerank_score > 0.3
+    assert result.sources[1].chunk_id == c1.chunk.id
+    assert result.sources[1].score == 0.91  # Original vector score preserved
+    assert result.sources[1].rerank_score is not None
+    assert result.sources[0].rerank_score > result.sources[1].rerank_score
+
+    # Metadata assertions
+    assert result.metadata["reranked"] is True
+    assert result.metadata["candidate_count"] == 2
+    assert result.metadata["top_k"] == 2
+
+
+@pytest.mark.asyncio
+async def test_rag_service_with_reranking_disabled_explicitly() -> None:
+    """Verify setting reranking_enabled=False bypasses reranking even if reranker is provided."""
+    c1 = make_retrieved_chunk(content="First chunk", score=0.9, rank=1)
+    mock_retrieval = AsyncMock(spec=RetrievalService)
+    mock_retrieval.retrieve.return_value = [c1]
+
+    llm_provider = MockLLMProvider()
+    router = LLMRouter(primary_provider=llm_provider)
+
+    rag_service = RAGGenerationService(
+        retrieval_service=mock_retrieval,
+        llm_router=router,
+        reranker=DeterministicReranker(),
+        reranking_enabled=False,
+        candidate_k=25,
+        default_top_k=5,
+    )
+
+    result = await rag_service.generate_answer(question="Test question", top_k=3)
+
+    # Retrieval called with top_k (3), NOT candidate_k (25)
+    mock_retrieval.retrieve.assert_awaited_once_with(
+        query="Test question",
+        top_k=3,
+        filters=None,
+        score_threshold=None,
+    )
+    assert result.metadata["reranked"] is False
+    assert "candidate_count" not in result.metadata
+
+
+@pytest.mark.asyncio
+async def test_rag_service_candidate_k_per_query_override() -> None:
+    """Verify candidate_k can be overridden per generate_answer query call."""
+    mock_retrieval = AsyncMock(spec=RetrievalService)
+    mock_retrieval.retrieve.return_value = []
+    router = LLMRouter(primary_provider=MockLLMProvider())
+
+    rag_service = RAGGenerationService(
+        retrieval_service=mock_retrieval,
+        llm_router=router,
+        reranker=DeterministicReranker(),
+        candidate_k=10,
+    )
+
+    await rag_service.generate_answer(
+        question="Query with override",
+        top_k=3,
+        candidate_k=30,
+    )
+
+    mock_retrieval.retrieve.assert_awaited_once_with(
+        query="Query with override",
+        top_k=30,
+        filters=None,
+        score_threshold=None,
+    )

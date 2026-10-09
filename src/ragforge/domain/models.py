@@ -64,6 +64,7 @@ class RetrievedChunk(BaseModel):
     score: float
     retrieval_type: str = "dense"
     rank: int
+    rerank_score: float | None = None
 
 
 class Citation(BaseModel):
@@ -206,6 +207,7 @@ class SourceReference(BaseModel):
     start_char_idx: int | None = None
     end_char_idx: int | None = None
     score: float = 0.0
+    rerank_score: float | None = None
     content_snippet: str = ""
 
     def __init__(

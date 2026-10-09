@@ -24,6 +24,8 @@ def test_cli_evaluate_parser_defaults() -> None:
     assert args.k_values == "1,3,5"
     assert args.top_k is None
     assert args.json is False
+    assert args.rerank is False
+    assert args.candidate_k is None
 
 
 def test_cli_evaluate_parser_custom_options() -> None:
@@ -47,6 +49,9 @@ def test_cli_evaluate_parser_custom_options() -> None:
             "1,5,10",
             "--top-k",
             "10",
+            "--rerank",
+            "--candidate-k",
+            "25",
             "--json",
             "--log-level",
             "DEBUG",
@@ -63,6 +68,8 @@ def test_cli_evaluate_parser_custom_options() -> None:
     assert args.in_memory is True
     assert args.k_values == "1,5,10"
     assert args.top_k == 10
+    assert args.rerank is True
+    assert args.candidate_k == 25
     assert args.json is True
     assert args.log_level == "DEBUG"
 

@@ -109,6 +109,25 @@ class Settings(BaseSettings):
         default=".ragforge/index_state.json",
         description="Path to JSON file tracking document indexing state and content hashes",
     )
+    # Reranking Settings (Stage 10)
+    reranking_enabled: bool = Field(
+        default=False,
+        description="Whether retrieval reranking is enabled before context assembly",
+    )
+    reranker_provider: str = Field(
+        default="deterministic",
+        description="Reranker provider identifier (e.g. deterministic)",
+    )
+    rerank_candidate_k: int = Field(
+        default=20,
+        gt=0,
+        description="Number of candidate chunks to retrieve from vector store before reranking",
+    )
+    rerank_top_k: int = Field(
+        default=5,
+        gt=0,
+        description="Final number of top reranked chunks to select for RAG context",
+    )
 
 
 @lru_cache
