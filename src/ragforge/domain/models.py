@@ -66,6 +66,7 @@ class RetrievedChunk(BaseModel):
     rank: int
     dense_score: float | None = None
     lexical_score: float | None = None
+    rerank_score: float | None = None
 
 
 class Citation(BaseModel):
@@ -208,6 +209,7 @@ class SourceReference(BaseModel):
     start_char_idx: int | None = None
     end_char_idx: int | None = None
     score: float = 0.0
+    rerank_score: float | None = None
     content_snippet: str = ""
 
     def __init__(
@@ -254,6 +256,7 @@ class RAGQueryRequest(BaseModel):
     score_threshold: float | None = None
     temperature: float = 0.0
     max_tokens: int | None = None
+    search_strategy: SearchStrategy | None = None
 
 
 class EvaluationCase(BaseModel):

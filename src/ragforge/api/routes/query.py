@@ -4,13 +4,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from ragforge.adapters.embeddings import (
-    DeterministicEmbeddingProvider,
-    FastEmbedProvider,
-)
-from ragforge.adapters.llm import GroqLLMProvider, OpenAILLMProvider
-from ragforge.adapters.vector_stores import QdrantVectorStore
+from ragforge.api.dependencies import get_rag_service
 from ragforge.core.config import Settings, get_settings
+from ragforge.domain.enums import SearchStrategy
 from ragforge.domain.exceptions import (
     AllLLMProvidersFailedError,
     LLMAuthenticationError,
@@ -21,11 +17,7 @@ from ragforge.domain.exceptions import (
     LLMTransientError,
 )
 from ragforge.domain.models import SourceReference
-from ragforge.ports.embeddings import BaseEmbeddingProvider
-from ragforge.ports.llm import BaseLLMProvider
-from ragforge.services.llm_router import LLMRouter
 from ragforge.services.rag import RAGGenerationService
-from ragforge.services.retrieval import RetrievalService
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +44,11 @@ class QueryRequest(BaseModel):
         le=1.0,
         description="Optional minimum cosine similarity cutoff for context chunks",
     )
+    search_strategy: SearchStrategy | None = Field(
+        default=None,
+        description="Optional retrieval search strategy ('dense', 'sparse', 'hybrid'). "
+        "Defaults to dense.",
+    )
 
 
 class QueryResponse(BaseModel):
@@ -63,86 +60,6 @@ class QueryResponse(BaseModel):
     model: str
 
 
-def get_rag_service(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> RAGGenerationService:
-    """Dependency provider instantiating the default RAG generation service."""
-    # 1. Embedding Provider
-    embedding_provider: BaseEmbeddingProvider
-    if settings.embedding_provider == "fastembed":
-        embedding_provider = FastEmbedProvider(
-            model_name=settings.embedding_model,
-            cache_dir=settings.embedding_cache_dir,
-        )
-    else:
-        embedding_provider = DeterministicEmbeddingProvider(
-            dimension=settings.qdrant_vector_dimension
-        )
-
-    # 2. Vector Store & Retrieval Service
-    vector_store = QdrantVectorStore(
-        url=settings.qdrant_url,
-        api_key=settings.qdrant_api_key,
-        collection_name=settings.qdrant_collection,
-        dimension=settings.qdrant_vector_dimension,
-    )
-    retrieval_service = RetrievalService(
-        embedding_provider=embedding_provider,
-        vector_store=vector_store,
-    )
-
-    # 3. Primary LLM Provider
-    primary_provider: BaseLLMProvider
-    if settings.llm_provider == "openai":
-        primary_provider = OpenAILLMProvider(
-            api_key=settings.openai_api_key,
-            model=settings.llm_model,
-            temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
-            timeout=settings.llm_timeout,
-        )
-    else:
-        primary_provider = GroqLLMProvider(
-            api_key=settings.groq_api_key,
-            model=settings.llm_model,
-            temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
-            timeout=settings.llm_timeout,
-        )
-
-    # 4. Optional Fallback LLM Provider
-    fallback_provider: BaseLLMProvider | None = None
-    if settings.llm_fallback_provider == "openai" and settings.openai_api_key:
-        fallback_provider = OpenAILLMProvider(
-            api_key=settings.openai_api_key,
-            model=settings.llm_fallback_model,
-            temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
-            timeout=settings.llm_timeout,
-        )
-    elif settings.llm_fallback_provider == "groq" and settings.groq_api_key:
-        fallback_provider = GroqLLMProvider(
-            api_key=settings.groq_api_key,
-            model=settings.llm_fallback_model,
-            temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
-            timeout=settings.llm_timeout,
-        )
-
-    # 5. Router and RAG Service
-    llm_router = LLMRouter(
-        primary_provider=primary_provider,
-        fallback_provider=fallback_provider,
-    )
-    return RAGGenerationService(
-        retrieval_service=retrieval_service,
-        llm_router=llm_router,
-        default_top_k=5,
-        default_temperature=settings.llm_temperature,
-        default_max_tokens=settings.llm_max_tokens,
-    )
-
-
 @router.post(
     "/query",
     response_model=QueryResponse,
@@ -152,6 +69,7 @@ def get_rag_service(
 async def query_documents(
     payload: QueryRequest,
     rag_service: Annotated[RAGGenerationService, Depends(get_rag_service)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> QueryResponse:
     """Execute retrieval-augmented answer synthesis for a user question."""
     if not payload.question.strip():
@@ -160,11 +78,24 @@ async def query_documents(
             detail="Question cannot be empty or whitespace.",
         )
 
+    if (
+        payload.search_strategy in (SearchStrategy.HYBRID, SearchStrategy.SPARSE)
+        and not settings.hybrid_enabled
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"'{payload.search_strategy.value}' retrieval is disabled in "
+                "application configuration."
+            ),
+        )
+
     try:
         rag_response = await rag_service.generate_answer(
             question=payload.question,
             top_k=payload.top_k,
             score_threshold=payload.score_threshold,
+            search_strategy=payload.search_strategy,
         )
         return QueryResponse(
             answer=rag_response.answer,
@@ -219,3 +150,6 @@ async def query_documents(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error during RAG processing.",
         ) from exc
+
+
+__all__ = ["QueryRequest", "QueryResponse", "get_rag_service", "query_documents", "router"]

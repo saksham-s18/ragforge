@@ -20,6 +20,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url="/redoc" if app_settings.debug or app_settings.env != "production" else None,
     )
 
+    if settings is not None:
+        app.dependency_overrides[get_settings] = lambda: app_settings
+
     # Register routes
     app.include_router(health_router)
     app.include_router(query_router, prefix=app_settings.api_v1_prefix)

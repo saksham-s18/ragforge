@@ -6,6 +6,7 @@ from ragforge.ports.fusion import BaseScoreFusion
 from ragforge.ports.lexical import BaseLexicalIndex
 from ragforge.ports.llm import BaseLLMProvider
 from ragforge.ports.loaders import BaseDocumentLoader
+from ragforge.ports.reranker import BaseReranker
 from ragforge.ports.state import BaseIndexStateStore
 from ragforge.ports.vector_store import BaseVectorStore
 
@@ -16,6 +17,7 @@ __all__ = [
     "BaseIndexStateStore",
     "BaseLLMProvider",
     "BaseLexicalIndex",
+    "BaseReranker",
     "BaseScoreFusion",
     "BaseVectorStore",
 ]
