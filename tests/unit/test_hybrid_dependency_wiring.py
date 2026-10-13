@@ -167,7 +167,11 @@ def test_unsupported_fusion_strategy_raises_value_error() -> None:
 
 def test_rag_service_hybrid_candidate_k_injection() -> None:
     """Verify get_rag_service injects configured hybrid_candidate_k."""
-    settings = Settings(hybrid_candidate_k=35)
+    settings = Settings(
+        groq_api_key="gsk_test_mock_key_12345",
+        hybrid_candidate_k=35,
+        _env_file=None,
+    )
     rag_service = get_rag_service(settings)
     assert rag_service._hybrid_candidate_k == 35
 
@@ -303,11 +307,13 @@ async def test_hybrid_and_reranking_wiring_end_to_end() -> None:
     3. The final response contains exactly 5 results/context items.
     """
     settings = Settings(
+        groq_api_key="gsk_test_mock_key_12345",
         hybrid_enabled=True,
         reranking_enabled=True,
         reranker_provider="deterministic",
         hybrid_candidate_k=20,
         rerank_top_k=5,
+        _env_file=None,
     )
 
     rag_service = get_rag_service(settings)
