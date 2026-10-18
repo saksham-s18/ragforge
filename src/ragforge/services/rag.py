@@ -43,7 +43,7 @@ class RAGGenerationService:
             reranking_enabled: Optional explicit boolean flag controlling whether reranking
                 is active (defaults to True if reranker is provided, else False).
             candidate_k: Default candidate retrieval depth when reranking is active.
-            default_top_k: Default number of nearest chunks to retrieve.
+            default_top_k: Default number of final context chunks to select.
             default_temperature: Default sampling temperature for generation.
             default_max_tokens: Default maximum output tokens to produce.
             hybrid_candidate_k: Candidate pool size retrieved from hybrid channels.
@@ -104,7 +104,6 @@ class RAGGenerationService:
         effective_max_tokens = max_tokens if max_tokens is not None else self._default_max_tokens
 
         use_reranking = self._reranking_enabled and (self._reranker is not None)
-
         # 1. Determine candidate retrieval depth
         if search_strategy == SearchStrategy.HYBRID:
             hybrid_target = candidate_k if candidate_k is not None else self._hybrid_candidate_k

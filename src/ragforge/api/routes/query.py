@@ -2,7 +2,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ragforge.api.dependencies import get_rag_service
 from ragforge.core.config import Settings, get_settings
@@ -32,11 +32,19 @@ class QueryRequest(BaseModel):
         description="User question to answer against indexed document context",
         min_length=1,
     )
-    top_k: int = Field(
-        default=5,
+    top_k: int | None = Field(
+        default=None,
         ge=1,
         le=50,
-        description="Number of nearest chunks to retrieve for context",
+        description=(
+            "Number of nearest chunks to retrieve for context (defaults to server configuration)"
+        ),
+    )
+    candidate_k: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Optional candidate retrieval count before reranking",
     )
     score_threshold: float | None = Field(
         default=None,
@@ -49,6 +57,18 @@ class QueryRequest(BaseModel):
         description="Optional retrieval search strategy ('dense', 'sparse', 'hybrid'). "
         "Defaults to dense.",
     )
+
+    @model_validator(mode="after")
+    def _validate_candidate_k_ge_top_k(self) -> "QueryRequest":
+        if (
+            self.candidate_k is not None
+            and self.top_k is not None
+            and self.candidate_k < self.top_k
+        ):
+            raise ValueError(
+                f"candidate_k ({self.candidate_k}) cannot be smaller than top_k ({self.top_k})."
+            )
+        return self
 
 
 class QueryResponse(BaseModel):
@@ -94,6 +114,7 @@ async def query_documents(
         rag_response = await rag_service.generate_answer(
             question=payload.question,
             top_k=payload.top_k,
+            candidate_k=payload.candidate_k,
             score_threshold=payload.score_threshold,
             search_strategy=payload.search_strategy,
         )

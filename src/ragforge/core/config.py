@@ -109,7 +109,6 @@ class Settings(BaseSettings):
         default=".ragforge/index_state.json",
         description="Path to JSON file tracking document indexing state and content hashes",
     )
-
     # Reranking Settings (Stage 10)
     reranking_enabled: bool = Field(
         default=False,

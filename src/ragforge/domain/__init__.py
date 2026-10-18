@@ -91,6 +91,7 @@ __all__ = [
     "RerankingError",
     "RAGQueryRequest",
     "RAGResponse",
+    "RerankingError",
     "RetrievalEvaluationReport",
     "RetrievedChunk",
     "SearchStrategy",

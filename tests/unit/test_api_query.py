@@ -237,6 +237,151 @@ async def test_query_endpoint_upstream_llm_error(test_app: tuple) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Candidate K & Reranker Forwarding Tests (Stage 10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_query_endpoint_passes_candidate_k(test_app: tuple) -> None:
+    """Verify POST /api/v1/query propagates candidate_k to the RAG service."""
+    app, mock_rag = test_app
+    mock_rag.generate_answer.return_value = RAGResponse(
+        question="What is RAG?",
+        answer="RAG combines retrieval with generation.",
+        sources=[],
+        provider="groq",
+        model="llama-3.3-70b-versatile",
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/query",
+            json={"question": "What is RAG?", "top_k": 3, "candidate_k": 20},
+        )
+
+    assert response.status_code == 200
+    mock_rag.generate_answer.assert_awaited_once_with(
+        question="What is RAG?",
+        top_k=3,
+        candidate_k=20,
+        score_threshold=None,
+        search_strategy=None,
+    )
+
+
+def test_get_rag_service_injects_deterministic_reranker() -> None:
+    """Verify get_rag_service configures DeterministicReranker when reranking is enabled."""
+    from ragforge.adapters.rerankers import DeterministicReranker
+
+    settings = Settings(
+        groq_api_key="gsk_test_mock_key_12345",
+        reranking_enabled=True,
+        reranker_provider="deterministic",
+        rerank_candidate_k=30,
+        rerank_top_k=7,
+        _env_file=None,
+    )
+    rag_service = get_rag_service(settings=settings)
+    assert rag_service._reranker is not None
+    assert isinstance(rag_service._reranker, DeterministicReranker)
+    assert rag_service._reranking_enabled is True
+    assert rag_service._candidate_k == 30
+    assert rag_service._default_top_k == 7
+
+
+def test_get_rag_service_no_reranker_when_disabled() -> None:
+    """Verify get_rag_service does not configure a reranker when reranking is disabled."""
+    settings = Settings(
+        groq_api_key="gsk_test_mock_key_12345",
+        reranking_enabled=False,
+        _env_file=None,
+    )
+    rag_service = get_rag_service(settings=settings)
+    assert rag_service._reranker is None
+    assert rag_service._reranking_enabled is False
+    assert rag_service._default_top_k == 5
+
+
+@pytest.mark.asyncio
+async def test_query_endpoint_omitted_top_k_forwards_none(test_app: tuple) -> None:
+    """Verify POST /api/v1/query without top_k forwards top_k=None so server configuration
+    supplies the default.
+    """
+    app, mock_rag = test_app
+    mock_rag.generate_answer.return_value = RAGResponse(
+        question="What is RAG?",
+        answer="RAG combines retrieval with generation.",
+        sources=[],
+        provider="groq",
+        model="llama-3.3-70b-versatile",
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/query",
+            json={"question": "What is RAG?"},
+        )
+
+    assert response.status_code == 200
+    mock_rag.generate_answer.assert_awaited_once_with(
+        question="What is RAG?",
+        top_k=None,
+        candidate_k=None,
+        score_threshold=None,
+        search_strategy=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_query_endpoint_rejects_candidate_k_smaller_than_top_k(test_app: tuple) -> None:
+    """Verify POST /api/v1/query rejects candidate_k < top_k with HTTP 422 when both
+    are supplied.
+    """
+    app, _ = test_app
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/query",
+            json={"question": "What is RAG?", "top_k": 10, "candidate_k": 5},
+        )
+
+    assert response.status_code == 422
+    data = response.json()
+    assert any("candidate_k" in str(err) for err in data.get("detail", []))
+
+
+@pytest.mark.asyncio
+async def test_query_endpoint_allows_candidate_k_when_top_k_omitted(test_app: tuple) -> None:
+    """Verify POST /api/v1/query does not reject candidate_k when top_k is omitted."""
+    app, mock_rag = test_app
+    mock_rag.generate_answer.return_value = RAGResponse(
+        question="What is RAG?",
+        answer="RAG combines retrieval with generation.",
+        sources=[],
+        provider="groq",
+        model="llama-3.3-70b-versatile",
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/query",
+            json={"question": "What is RAG?", "candidate_k": 25},
+        )
+
+    assert response.status_code == 200
+    mock_rag.generate_answer.assert_awaited_once_with(
+        question="What is RAG?",
+        top_k=None,
+        candidate_k=25,
+        score_threshold=None,
+        search_strategy=None,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Search Strategy & Hybrid Retrieval Tests (Stage 11 Step 4)
 # ---------------------------------------------------------------------------
 
@@ -256,6 +401,7 @@ async def test_query_endpoint_omitted_search_strategy_routes_default(test_app: t
     mock_rag.generate_answer.assert_awaited_once_with(
         question="What is RAGForge?",
         top_k=3,
+        candidate_k=None,
         score_threshold=None,
         search_strategy=None,
     )
@@ -280,6 +426,7 @@ async def test_query_endpoint_explicit_dense_strategy(test_app: tuple) -> None:
     mock_rag.generate_answer.assert_awaited_once_with(
         question="What is RAGForge?",
         top_k=5,
+        candidate_k=None,
         score_threshold=None,
         search_strategy=SearchStrategy.DENSE,
     )
@@ -331,7 +478,8 @@ async def test_query_endpoint_hybrid_enabled_routes_hybrid(hybrid_test_app: tupl
     assert response.status_code == 200
     mock_rag.generate_answer.assert_awaited_once_with(
         question="What is RAGForge?",
-        top_k=5,
+        top_k=None,
+        candidate_k=None,
         score_threshold=None,
         search_strategy=SearchStrategy.HYBRID,
     )
@@ -351,7 +499,8 @@ async def test_query_endpoint_hybrid_enabled_routes_sparse(hybrid_test_app: tupl
     assert response.status_code == 200
     mock_rag.generate_answer.assert_awaited_once_with(
         question="What is RAGForge?",
-        top_k=5,
+        top_k=None,
+        candidate_k=None,
         score_threshold=None,
         search_strategy=SearchStrategy.SPARSE,
     )
@@ -373,7 +522,8 @@ async def test_query_endpoint_hybrid_enabled_omitted_strategy_remains_dense(
     assert response.status_code == 200
     mock_rag.generate_answer.assert_awaited_once_with(
         question="What is RAGForge?",
-        top_k=5,
+        top_k=None,
+        candidate_k=None,
         score_threshold=None,
         search_strategy=None,
     )

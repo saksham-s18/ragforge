@@ -11,6 +11,7 @@ from ragforge.adapters.embeddings import (
     DeterministicEmbeddingProvider,
     FastEmbedProvider,
 )
+from ragforge.adapters.rerankers import DeterministicReranker
 from ragforge.adapters.state import JsonFileIndexStateStore
 from ragforge.adapters.vector_stores import (
     InMemoryVectorStore,
@@ -165,6 +166,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Maximum chunks to retrieve per query (default: max of K values).",
+    )
+    retrieval_parser.add_argument(
+        "--rerank",
+        action="store_true",
+        help="Enable second-stage deterministic reranking before computing evaluation metrics.",
+    )
+    retrieval_parser.add_argument(
+        "--candidate-k",
+        type=int,
+        default=None,
+        help="Candidate retrieval depth when reranking is enabled (default: 20).",
     )
     retrieval_parser.add_argument(
         "--json",
@@ -396,9 +408,12 @@ async def execute_retrieval_evaluation(
             vector_store=vector_store,
         )
 
+        reranker = DeterministicReranker() if getattr(args, "rerank", False) else None
         runner = EvaluationRunner(
             retrieval_service=retrieval_service,
             k_values=k_values,
+            reranker=reranker,
+            candidate_k=getattr(args, "candidate_k", None),
         )
 
         report = await runner.evaluate_dataset(

@@ -21,6 +21,10 @@ def test_settings_load_defaults() -> None:
     assert settings.qdrant_api_key is None
     assert settings.qdrant_collection == "ragforge_chunks"
     assert settings.qdrant_vector_dimension == 64
+    assert settings.reranking_enabled is False
+    assert settings.reranker_provider == "deterministic"
+    assert settings.rerank_candidate_k == 20
+    assert settings.rerank_top_k == 5
     assert settings.hybrid_enabled is False
     assert settings.fusion_strategy == "rrf"
     assert settings.rrf_k == 60
@@ -118,3 +122,17 @@ def test_settings_unsupported_fusion_strategy(invalid_strategy: str) -> None:
     with pytest.raises(ValidationError) as exc_info:
         Settings(fusion_strategy=invalid_strategy)
     assert "unsupported fusion strategy" in str(exc_info.value).lower()
+
+
+def test_settings_reranking_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that reranking configuration can be overridden via environment variables."""
+    monkeypatch.setenv("RAGFORGE_RERANKING_ENABLED", "true")
+    monkeypatch.setenv("RAGFORGE_RERANKER_PROVIDER", "custom_provider")
+    monkeypatch.setenv("RAGFORGE_RERANK_CANDIDATE_K", "35")
+    monkeypatch.setenv("RAGFORGE_RERANK_TOP_K", "8")
+
+    settings = Settings()
+    assert settings.reranking_enabled is True
+    assert settings.reranker_provider == "custom_provider"
+    assert settings.rerank_candidate_k == 35
+    assert settings.rerank_top_k == 8
