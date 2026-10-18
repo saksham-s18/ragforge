@@ -26,6 +26,7 @@ def test_settings_load_defaults() -> None:
     assert settings.rerank_candidate_k == 20
     assert settings.rerank_top_k == 5
     assert settings.hybrid_enabled is False
+    assert settings.lexical_index_file == ".ragforge/lexical_index.json"
     assert settings.fusion_strategy == "rrf"
     assert settings.rrf_k == 60
     assert settings.rrf_dense_weight == 1.0
@@ -53,6 +54,7 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RAGFORGE_EMBEDDING_MODEL", "custom-model")
     monkeypatch.setenv("RAGFORGE_EMBEDDING_CACHE_DIR", "/tmp/models")
     monkeypatch.setenv("RAGFORGE_HYBRID_ENABLED", "true")
+    monkeypatch.setenv("RAGFORGE_LEXICAL_INDEX_FILE", "/tmp/custom_lexical.json")
     monkeypatch.setenv("RAGFORGE_FUSION_STRATEGY", "rrf")
     monkeypatch.setenv("RAGFORGE_RRF_K", "45")
     monkeypatch.setenv("RAGFORGE_RRF_DENSE_WEIGHT", "1.5")
@@ -71,6 +73,7 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.embedding_model == "custom-model"
     assert settings.embedding_cache_dir == "/tmp/models"
     assert settings.hybrid_enabled is True
+    assert settings.lexical_index_file == "/tmp/custom_lexical.json"
     assert settings.fusion_strategy == "rrf"
     assert settings.rrf_k == 45
     assert settings.rrf_dense_weight == 1.5

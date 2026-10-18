@@ -52,8 +52,11 @@ def get_lexical_index(settings: Settings | None = None) -> BaseLexicalIndex | No
         return None
 
     if _shared_lexical_index is None:
-        logger.info("Initializing shared BM25LexicalIndex instance for hybrid retrieval.")
-        _shared_lexical_index = BM25LexicalIndex()
+        logger.info(
+            "Initializing shared BM25LexicalIndex instance for hybrid retrieval (index_file=%s).",
+            app_settings.lexical_index_file,
+        )
+        _shared_lexical_index = BM25LexicalIndex(index_file=app_settings.lexical_index_file)
     return _shared_lexical_index
 
 

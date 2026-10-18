@@ -313,10 +313,16 @@ class IndexingService:
 
             # Incremental change detection via state store
             existing_record = await self._state_store.get(path_str)
+            lexical_missing = False
+            if self._lexical_index is not None and existing_record is not None:
+                has_doc = await self._lexical_index.has_document(existing_record.document_id)
+                lexical_missing = not has_doc
+
             if (
                 not force
                 and existing_record is not None
                 and existing_record.content_hash == content_hash
+                and not lexical_missing
             ):
                 skipped_count += 1
                 doc_results.append(
@@ -395,10 +401,26 @@ class IndexingService:
         # Phase 3: Vector Store Upsert & Lexical Index Synchronization
         if all_chunks:
             # 1. Upsert chunks into vector store in batches
-            for i in range(0, len(all_chunks), self._batch_size):
-                batch_chunks = all_chunks[i : i + self._batch_size]
-                await self._vector_store.upsert(batch_chunks)
-            vectors_upserted_count = len(all_chunks)
+            try:
+                for i in range(0, len(all_chunks), self._batch_size):
+                    batch_chunks = all_chunks[i : i + self._batch_size]
+                    await self._vector_store.upsert(batch_chunks)
+                vectors_upserted_count = len(all_chunks)
+            except Exception as vec_exc:
+                logger.error(
+                    "Vector store upsert failed: %s. Attempting rollback.",
+                    vec_exc,
+                )
+                for p in prepared_docs:
+                    try:
+                        await self._vector_store.delete_by_document_id(p.doc.id)
+                    except Exception as rb_exc:
+                        logger.error(
+                            "Rollback failed for document %s in vector store: %s",
+                            p.doc.id,
+                            rb_exc,
+                        )
+                raise
 
             # 2. Upsert chunks into lexical index
             if self._lexical_index is not None:
@@ -409,7 +431,8 @@ class IndexingService:
                         "Lexical indexing failed after vector upsert: %s. Attempting rollback.",
                         exc,
                     )
-                    # Attempt best-effort rollback of newly upserted chunks from vector store
+                    # Attempt best-effort rollback of newly upserted chunks
+                    # from both vector store and lexical index
                     for p in prepared_docs:
                         try:
                             await self._vector_store.delete_by_document_id(p.doc.id)
@@ -418,6 +441,14 @@ class IndexingService:
                                 "Rollback failed for document %s in vector store: %s",
                                 p.doc.id,
                                 rb_exc,
+                            )
+                        try:
+                            await self._lexical_index.delete_by_document_id(p.doc.id)
+                        except Exception as rb_lex_exc:
+                            logger.error(
+                                "Rollback failed for document %s in lexical index: %s",
+                                p.doc.id,
+                                rb_lex_exc,
                             )
                     raise
 

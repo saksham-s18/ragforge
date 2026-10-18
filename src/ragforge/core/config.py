@@ -134,6 +134,10 @@ class Settings(BaseSettings):
         default=False,
         description="Enable hybrid retrieval (dense + lexical BM25 with score fusion)",
     )
+    lexical_index_file: str = Field(
+        default=".ragforge/lexical_index.json",
+        description="Path to JSON file persisting lexical BM25 index state and chunks",
+    )
     fusion_strategy: str = Field(
         default="rrf",
         description="Fusion strategy identifier for multi-channel retrieval (currently 'rrf')",

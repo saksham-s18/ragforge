@@ -46,3 +46,10 @@ class BaseLexicalIndex(ABC):
     @abstractmethod
     def count(self) -> int:
         """Return the total number of indexed chunks."""
+
+    @abstractmethod
+    async def has_document(
+        self,
+        document_id: UUID,
+    ) -> bool:
+        """Check whether chunks for a document ID are present in the lexical index."""

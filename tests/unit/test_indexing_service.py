@@ -878,3 +878,72 @@ async def test_hybrid_indexing_delete_document_removes_from_all_stores(
 
     # Deleting again returns False
     assert await service.delete_document(doc_file) is False
+
+
+@pytest.mark.asyncio
+async def test_hybrid_indexing_partial_lexical_failure_rolls_back_both_stores(
+    hybrid_pipeline: tuple[
+        IndexingService, InMemoryVectorStore, BM25LexicalIndex, InMemoryIndexStateStore
+    ],
+    tmp_path: Path,
+) -> None:
+    """28. Verify partial lexical failure rolls back chunks from BOTH stores."""
+    service, store, lexical, state = hybrid_pipeline
+    doc_file = tmp_path / "partial_fail.txt"
+    doc_file.write_text(
+        "Testing partial lexical rollback consistency across stores.", encoding="utf-8"
+    )
+
+    real_index_chunks = lexical.index_chunks
+
+    async def partially_failing_index_chunks(chunks: list) -> None:
+        # Index into lexical index partially first, then raise an exception
+        await real_index_chunks(chunks)
+        raise RuntimeError("Disk full after partial write to lexical index")
+
+    lexical.index_chunks = partially_failing_index_chunks  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="Disk full after partial write"):
+        await service.index_path(doc_file)
+
+    # State store must have NO record of this document
+    record = await state.get(str(doc_file.resolve()))
+    assert record is None
+
+    # Rollback must have deleted chunks from BOTH vector store AND lexical index
+    assert store.count() == 0
+    assert lexical.count() == 0
+
+
+@pytest.mark.asyncio
+async def test_hybrid_indexing_reindexes_when_lexical_index_is_missing_document(
+    hybrid_pipeline: tuple[
+        IndexingService, InMemoryVectorStore, BM25LexicalIndex, InMemoryIndexStateStore
+    ],
+    tmp_path: Path,
+) -> None:
+    """29. Verify unchanged document is reindexed when lexical index is missing its chunks."""
+    service, store, lexical, state = hybrid_pipeline
+    doc_file = tmp_path / "missing_lexical.txt"
+    doc_file.write_text(
+        "Content that was indexed in vector store but missing from lexical index.",
+        encoding="utf-8",
+    )
+
+    # First, run normal indexing
+    res1 = await service.index_path(doc_file)
+    assert res1.indexed_documents == 1
+    assert store.count() >= 1
+    assert lexical.count() >= 1
+
+    # Simulate empty lexical index (e.g. after restart or previous dense-only indexing)
+    await lexical.clear()
+    assert lexical.count() == 0
+
+    # Second run without force: state store hash matches, BUT lexical index is missing chunks
+    res2 = await service.index_path(doc_file, force=False)
+    # Must NOT skip! Must reindex so lexical store is restored
+    assert res2.skipped_documents == 0
+    assert res2.updated_documents == 1
+    assert store.count() == res2.chunks_created
+    assert lexical.count() == res2.chunks_created

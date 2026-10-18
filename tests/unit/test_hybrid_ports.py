@@ -165,12 +165,17 @@ class TestBaseLexicalIndexPort:
             def count(self) -> int:
                 return len(self._chunks)
 
+            async def has_document(self, document_id: UUID) -> bool:
+                return any(c.document_id == document_id for c in self._chunks.values())
+
         index = ConcreteLexicalIndex()
         assert index.count() == 0
 
         chunk = _create_sample_chunk()
+        assert await index.has_document(chunk.document_id) is False
         await index.index_chunks([chunk])
         assert index.count() == 1
+        assert await index.has_document(chunk.document_id) is True
 
         results = await index.search("test", top_k=5)
         assert len(results) == 1

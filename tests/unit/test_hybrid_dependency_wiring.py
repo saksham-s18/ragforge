@@ -1,6 +1,7 @@
 """Unit tests for Stage 11 Step 4 dependency wiring, shared lexical index, and RRF configuration."""
 
 from collections.abc import Generator
+from pathlib import Path
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -27,8 +28,11 @@ from tests.unit.test_rag_service import MockLLMProvider, make_retrieved_chunk
 
 
 @pytest.fixture(autouse=True)
-def clean_dependencies() -> Generator[None, None, None]:
-    """Ensure clean dependency singletons before and after every test."""
+def clean_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Generator[None, None, None]:
+    """Ensure clean singletons and isolated lexical index file before and after tests."""
+    monkeypatch.setenv("RAGFORGE_LEXICAL_INDEX_FILE", str(tmp_path / "test_lexical_index.json"))
     reset_dependencies()
     yield
     reset_dependencies()

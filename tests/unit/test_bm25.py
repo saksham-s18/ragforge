@@ -1,5 +1,6 @@
 """Unit tests for Okapi BM25 lexical search index adapter."""
 
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -398,6 +399,120 @@ class TestBM25LexicalIndex:
         assert "common_term" not in index._inverted_index
         assert "unique_keyword_b" not in index._inverted_index
         assert "new" in index._inverted_index
+
+    @pytest.mark.asyncio
+    async def test_has_document(self) -> None:
+        """Verify has_document correctly checks presence of chunks for a document ID."""
+        index = BM25LexicalIndex()
+        doc_id1 = uuid4()
+        doc_id2 = uuid4()
+
+        assert await index.has_document(doc_id1) is False
+
+        c1 = _create_chunk("Document 1 chunk content", doc_id=doc_id1)
+        await index.index_chunks([c1])
+        assert await index.has_document(doc_id1) is True
+        assert await index.has_document(doc_id2) is False
+
+        await index.delete_by_document_id(doc_id1)
+        assert await index.has_document(doc_id1) is False
+
+    @pytest.mark.asyncio
+    async def test_file_persistence_save_and_reload(self, tmp_path: Path) -> None:
+        """Verify chunks persisted to disk survive process restart and load cleanly."""
+        index_file = tmp_path / "lexical_index.json"
+        index1 = BM25LexicalIndex(index_file=index_file)
+        assert index1.count() == 0
+
+        chunk1 = _create_chunk("Persisted distributed systems architecture", chunk_id=uuid4())
+        chunk2 = _create_chunk("Machine learning neural network models", chunk_id=uuid4())
+        await index1.index_chunks([chunk1, chunk2])
+        assert index1.count() == 2
+        assert index_file.exists()
+
+        # Simulate fresh process startup / restart
+        index2 = BM25LexicalIndex(index_file=index_file)
+        assert index2.count() == 2
+        assert await index2.has_document(chunk1.document_id) is True
+        assert await index2.has_document(chunk2.document_id) is True
+
+        results = await index2.search("distributed systems", top_k=5)
+        assert len(results) >= 1
+        assert results[0].chunk.id == chunk1.id
+
+    @pytest.mark.asyncio
+    async def test_file_persistence_auto_reload_on_mtime_change(self, tmp_path: Path) -> None:
+        """Verify API index instance detects disk modifications from external CLI process."""
+        index_file = tmp_path / "shared_index.json"
+        api_index = BM25LexicalIndex(index_file=index_file)
+        cli_index = BM25LexicalIndex(index_file=index_file)
+
+        assert api_index.count() == 0
+        assert cli_index.count() == 0
+
+        # CLI process indexes a chunk
+        chunk = _create_chunk("Cross process synchronized lexical indexing")
+        await cli_index.index_chunks([chunk])
+        assert cli_index.count() == 1
+
+        # API process automatically detects file mtime change on next read
+        assert api_index.count() == 1
+        results = await api_index.search("synchronized", top_k=5)
+        assert len(results) == 1
+        assert results[0].chunk.id == chunk.id
+
+    @pytest.mark.asyncio
+    async def test_file_persistence_delete_updates_disk(self, tmp_path: Path) -> None:
+        """Verify chunk and document deletions persist to disk."""
+        index_file = tmp_path / "delete_test.json"
+        index = BM25LexicalIndex(index_file=index_file)
+        chunk = _create_chunk("Ephemeral chunk to be removed")
+        await index.index_chunks([chunk])
+        assert index.count() == 1
+
+        await index.delete_by_chunk_id(chunk.id)
+        assert index.count() == 0
+
+        # Re-read from disk to confirm deletion persisted
+        fresh_index = BM25LexicalIndex(index_file=index_file)
+        assert fresh_index.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_file_persistence_corrupted_file_recovery(self, tmp_path: Path) -> None:
+        """Verify corrupted JSON file does not crash initialization and initializes empty state."""
+        index_file = tmp_path / "corrupted.json"
+        index_file.write_text("{invalid json content!@#$", encoding="utf-8")
+
+        index = BM25LexicalIndex(index_file=index_file)
+        assert index.count() == 0
+        assert await index.search("anything") == []
+
+    @pytest.mark.asyncio
+    async def test_file_persistence_structurally_invalid_json(self, tmp_path: Path) -> None:
+        """Verify non-dict JSON or invalid schema does not crash and yields empty index."""
+        index_file = tmp_path / "not_dict.json"
+        index_file.write_text('["item1", "item2"]', encoding="utf-8")
+
+        index = BM25LexicalIndex(index_file=index_file)
+        assert index.count() == 0
+        assert await index.has_document(uuid4()) is False
+
+    @pytest.mark.asyncio
+    async def test_file_persistence_deleted_file_resets_in_memory_state(
+        self, tmp_path: Path
+    ) -> None:
+        """Verify deleting index file on disk causes next read to clear in-memory state."""
+        index_file = tmp_path / "deletable.json"
+        index = BM25LexicalIndex(index_file=index_file)
+        chunk = _create_chunk("Content that will be deleted along with file")
+        await index.index_chunks([chunk])
+        assert index.count() == 1
+        assert index_file.exists()
+
+        index_file.unlink()
+        assert not index_file.exists()
+        assert index.count() == 0
+        assert await index.has_document(chunk.document_id) is False
 
 
 def test_tokenize_helper() -> None:

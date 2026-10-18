@@ -11,6 +11,7 @@ from ragforge.adapters.embeddings import (
     DeterministicEmbeddingProvider,
     FastEmbedProvider,
 )
+from ragforge.adapters.lexical import BM25LexicalIndex
 from ragforge.adapters.rerankers import DeterministicReranker
 from ragforge.adapters.state import JsonFileIndexStateStore
 from ragforge.adapters.vector_stores import (
@@ -27,6 +28,7 @@ from ragforge.domain.exceptions import (
 from ragforge.domain.models import IndexingResult, RetrievalEvaluationReport
 from ragforge.evaluation import EvaluationRunner, load_evaluation_dataset
 from ragforge.ports.embeddings import BaseEmbeddingProvider
+from ragforge.ports.lexical import BaseLexicalIndex
 from ragforge.ports.vector_store import BaseVectorStore
 from ragforge.services.indexing import IndexingService
 from ragforge.services.retrieval import RetrievalService
@@ -86,6 +88,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     index_parser.add_argument(
+        "--lexical-index-file",
+        type=str,
+        default=None,
+        help="Path to JSON file persisting lexical BM25 index (default: from configuration).",
+    )
+    index_parser.add_argument(
         "--in-memory",
         action="store_true",
         help="Use an in-memory vector store instead of Qdrant (useful for offline tests).",
@@ -94,6 +102,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Force reindex all discovered documents, ignoring saved index state.",
+    )
+    index_parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        default=None,
+        help="Enable hybrid lexical indexing alongside vector storage.",
     )
     index_parser.add_argument(
         "--log-level",
@@ -166,6 +180,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Maximum chunks to retrieve per query (default: max of K values).",
+    )
+    retrieval_parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        default=None,
+        help="Enable hybrid retrieval (dense + lexical BM25).",
+    )
+    retrieval_parser.add_argument(
+        "--lexical-index-file",
+        type=str,
+        default=None,
+        help="Path to JSON file persisting lexical BM25 index (default: from configuration).",
     )
     retrieval_parser.add_argument(
         "--rerank",
@@ -268,12 +294,25 @@ async def execute_indexing(args: argparse.Namespace, settings: Settings) -> Inde
         # Initialize State Store
         state_store = JsonFileIndexStateStore(file_path=Path(state_file))
 
+        # Initialize Lexical Index if hybrid retrieval is enabled
+        lexical_index: BaseLexicalIndex | None = None
+        is_hybrid = settings.hybrid_enabled
+        if getattr(args, "hybrid", None) is not None:
+            is_hybrid = bool(args.hybrid)
+        elif getattr(args, "lexical_index_file", None) is not None:
+            is_hybrid = True
+
+        if is_hybrid:
+            lexical_file = getattr(args, "lexical_index_file", None) or settings.lexical_index_file
+            lexical_index = BM25LexicalIndex(index_file=lexical_file)
+
         # Instantiate Indexing Service
         service = IndexingService(
             embedding_provider=provider,
             vector_store=vector_store,
             state_store=state_store,
             batch_size=batch_size,
+            lexical_index=lexical_index,
         )
 
         return await service.index_path(args.path, force=args.force)
@@ -393,12 +432,24 @@ async def execute_retrieval_evaluation(
             store_desc = f"Qdrant ({collection_name})"
 
         # Optionally index documents if index_path is supplied
+        is_hybrid = settings.hybrid_enabled
+        if getattr(args, "hybrid", None) is not None:
+            is_hybrid = bool(args.hybrid)
+        elif getattr(args, "lexical_index_file", None) is not None:
+            is_hybrid = True
+
+        lexical_index: BaseLexicalIndex | None = None
+        if is_hybrid:
+            lexical_file = getattr(args, "lexical_index_file", None) or settings.lexical_index_file
+            lexical_index = BM25LexicalIndex(index_file=lexical_file)
+
         if args.index_path:
             logger.info("Indexing documents from '%s' prior to evaluation", args.index_path)
             indexing_service = IndexingService(
                 embedding_provider=provider,
                 vector_store=vector_store,
                 batch_size=batch_size,
+                lexical_index=lexical_index,
             )
             await indexing_service.index_path(args.index_path)
 
@@ -406,6 +457,7 @@ async def execute_retrieval_evaluation(
         retrieval_service = RetrievalService(
             embedding_provider=provider,
             vector_store=vector_store,
+            lexical_index=lexical_index,
         )
 
         reranker = DeterministicReranker() if getattr(args, "rerank", False) else None

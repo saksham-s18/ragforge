@@ -1,12 +1,19 @@
+import json
+import logging
 import math
+import os
 import re
 from collections import Counter
 from collections.abc import Sequence
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 from uuid import UUID
 
 from ragforge.domain.models import Chunk, RetrievedChunk
 from ragforge.ports.lexical import BaseLexicalIndex
+
+logger = logging.getLogger(__name__)
 
 
 def tokenize(text: str) -> list[str]:
@@ -28,21 +35,32 @@ def tokenize(text: str) -> list[str]:
 class BM25LexicalIndex(BaseLexicalIndex):
     """Deterministic, pure-Python Okapi BM25 lexical index implementing BaseLexicalIndex.
 
-    Maintains an in-memory inverted index of tokenized terms to chunk postings with term
+    Maintains an inverted index of tokenized terms to chunk postings with term
     frequencies, document lengths, and document frequencies. Implements standard Okapi
     BM25 with non-negative Robertson-Spärck Jones IDF and length normalization.
+    Optionally persists state to disk via an atomic JSON file for process lifecycle survival.
+
+    Concurrency Model:
+        - Safe for concurrent readers across multiple processes or workers (each reader
+          detects file mtime changes and reloads updated index snapshots atomically).
+        - Safe for single-writer + multiple-reader usage (e.g. single CLI ingestion
+          process updating the index file while API workers serve queries).
+        - Concurrent writers are NOT serialized without external locking; multiple
+          simultaneous writers may overwrite each other's snapshots.
     """
 
     def __init__(
         self,
         k1: float = 1.5,
         b: float = 0.75,
+        index_file: str | Path | None = None,
     ) -> None:
         """Initialize the BM25 lexical index.
 
         Args:
             k1: Term frequency saturation parameter (k1 >= 0, default 1.5).
             b: Document length normalization parameter (0.0 <= b <= 1.0, default 0.75).
+            index_file: Optional path to JSON file for durable state persistence.
 
         Raises:
             ValueError: If k1 < 0 or b is outside [0.0, 1.0].
@@ -54,6 +72,8 @@ class BM25LexicalIndex(BaseLexicalIndex):
 
         self.k1 = k1
         self.b = b
+        self.index_file = Path(index_file).resolve() if index_file is not None else None
+        self._loaded_mtime_ns: int | None = None
 
         # Primary storage: chunk_id -> Chunk
         self._chunks: dict[UUID, Chunk] = {}
@@ -63,37 +83,150 @@ class BM25LexicalIndex(BaseLexicalIndex):
         self._chunk_term_counts: dict[UUID, dict[str, int]] = {}
         # Inverted index: term -> {chunk_id -> count}
         self._inverted_index: dict[str, dict[UUID, int]] = {}
+        # Document ID mapping: document_id -> set of chunk_ids
+        self._doc_chunk_ids: dict[UUID, set[UUID]] = {}
         # Sum of all document lengths
         self._total_doc_len: int = 0
+
+        if self.index_file is not None:
+            self._ensure_loaded()
 
     @staticmethod
     def tokenize(text: str) -> list[str]:
         """Expose tokenization as a class/instance helper."""
         return tokenize(text)
 
-    def count(self) -> int:
-        """Return the total number of indexed chunks."""
-        return len(self._chunks)
-
-    def __len__(self) -> int:
-        return len(self._chunks)
-
-    async def get(self, chunk_id: UUID) -> Chunk | None:
-        """Retrieve an indexed chunk by its ID."""
-        return self._chunks.get(chunk_id)
-
-    async def clear(self) -> None:
-        """Clear all indexed data from the lexical index."""
+    def _reset_in_memory_state(self) -> None:
+        """Clear all in-memory index structures."""
         self._chunks.clear()
         self._doc_lengths.clear()
         self._chunk_term_counts.clear()
         self._inverted_index.clear()
+        self._doc_chunk_ids.clear()
         self._total_doc_len = 0
+
+    def _ensure_loaded(self) -> None:
+        """Ensure in-memory index is up to date with disk state."""
+        if self.index_file is None:
+            return
+        if not self.index_file.exists():
+            if self._loaded_mtime_ns is not None:
+                self._reset_in_memory_state()
+                self._loaded_mtime_ns = None
+            return
+        try:
+            mtime_ns = self.index_file.stat().st_mtime_ns
+        except OSError:
+            return
+        if self._loaded_mtime_ns is not None and mtime_ns <= self._loaded_mtime_ns:
+            return
+        self._load_from_disk()
+
+    def _load_from_disk(self) -> None:
+        """Read serialized chunks from disk and populate internal indices."""
+        if self.index_file is None or not self.index_file.exists():
+            return
+
+        try:
+            mtime_ns = self.index_file.stat().st_mtime_ns
+            content = self.index_file.read_text(encoding="utf-8").strip()
+            if not content:
+                self._reset_in_memory_state()
+                self._loaded_mtime_ns = mtime_ns
+                return
+
+            data = json.loads(content)
+            if not isinstance(data, dict):
+                raise ValueError(
+                    f"Expected JSON object in '{self.index_file}', got {type(data).__name__}"
+                )
+
+            chunks_data = data.get("chunks", [])
+            chunks = [Chunk.model_validate(c) for c in chunks_data]
+            self._reset_in_memory_state()
+            self._index_chunks_internal(chunks)
+            self._loaded_mtime_ns = mtime_ns
+        except Exception as exc:
+            logger.warning(
+                "Failed to read lexical index from '%s': %s. Initializing empty state.",
+                self.index_file,
+                exc,
+            )
+            self._reset_in_memory_state()
+            try:
+                self._loaded_mtime_ns = self.index_file.stat().st_mtime_ns
+            except OSError:
+                pass
+
+    def _save_to_disk(self) -> None:
+        """Atomically persist lexical index state and chunks to disk."""
+        if self.index_file is None:
+            return
+
+        self.index_file.parent.mkdir(parents=True, exist_ok=True)
+        serialized_chunks = [chunk.model_dump(mode="json") for chunk in self._chunks.values()]
+        payload = {
+            "version": 1,
+            "k1": self.k1,
+            "b": self.b,
+            "chunks": serialized_chunks,
+        }
+        json_text = json.dumps(payload, indent=2)
+
+        temp_file = NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=self.index_file.parent,
+            delete=False,
+        )
+        try:
+            temp_file.write(json_text)
+            temp_file.flush()
+            temp_file.close()
+            os.replace(temp_file.name, self.index_file)
+            self._loaded_mtime_ns = self.index_file.stat().st_mtime_ns
+        except Exception:
+            if os.path.exists(temp_file.name):
+                try:
+                    os.remove(temp_file.name)
+                except OSError:
+                    pass
+            raise
+
+    def count(self) -> int:
+        """Return the total number of indexed chunks."""
+        self._ensure_loaded()
+        return len(self._chunks)
+
+    def __len__(self) -> int:
+        self._ensure_loaded()
+        return len(self._chunks)
+
+    async def get(self, chunk_id: UUID) -> Chunk | None:
+        """Retrieve an indexed chunk by its ID."""
+        self._ensure_loaded()
+        return self._chunks.get(chunk_id)
+
+    async def has_document(self, document_id: UUID) -> bool:
+        """Check whether chunks for a document ID are present in the lexical index."""
+        self._ensure_loaded()
+        return bool(self._doc_chunk_ids.get(document_id))
+
+    async def clear(self) -> None:
+        """Clear all indexed data from the lexical index."""
+        self._reset_in_memory_state()
+        self._save_to_disk()
 
     def _remove_chunk(self, chunk_id: UUID) -> None:
         """Internal helper to atomically purge a chunk from all internal indices."""
         if chunk_id not in self._chunks:
             return
+
+        chunk = self._chunks[chunk_id]
+        if chunk.document_id in self._doc_chunk_ids:
+            self._doc_chunk_ids[chunk.document_id].discard(chunk_id)
+            if not self._doc_chunk_ids[chunk.document_id]:
+                del self._doc_chunk_ids[chunk.document_id]
 
         term_counts = self._chunk_term_counts.pop(chunk_id, {})
         for term in term_counts:
@@ -109,28 +242,25 @@ class BM25LexicalIndex(BaseLexicalIndex):
 
     async def delete_by_chunk_id(self, chunk_id: UUID) -> bool:
         """Delete a single chunk by its ID. Returns True if found and deleted."""
+        self._ensure_loaded()
         if chunk_id not in self._chunks:
             return False
         self._remove_chunk(chunk_id)
+        self._save_to_disk()
         return True
 
     async def delete_by_document_id(self, document_id: UUID) -> None:
         """Delete all indexed chunks associated with a document ID."""
-        matching_chunk_ids = [
-            cid for cid, chunk in self._chunks.items() if chunk.document_id == document_id
-        ]
+        self._ensure_loaded()
+        matching_chunk_ids = list(self._doc_chunk_ids.get(document_id, set()))
+        if not matching_chunk_ids:
+            return
         for cid in matching_chunk_ids:
             self._remove_chunk(cid)
+        self._save_to_disk()
 
-    async def index_chunks(self, chunks: Sequence[Chunk]) -> None:
-        """Index or update chunks in the lexical search index.
-
-        If a chunk with an existing chunk ID is indexed, its prior term contributions,
-        postings, and length metadata are purged before re-indexing to prevent stale postings.
-
-        Args:
-            chunks: Sequence of domain Chunk objects to index.
-        """
+    def _index_chunks_internal(self, chunks: Sequence[Chunk]) -> None:
+        """Internal helper to index chunks into memory structures."""
         for chunk in chunks:
             if chunk.id in self._chunks:
                 self._remove_chunk(chunk.id)
@@ -144,10 +274,29 @@ class BM25LexicalIndex(BaseLexicalIndex):
             self._total_doc_len += doc_len
             self._chunk_term_counts[chunk.id] = term_counts
 
+            if chunk.document_id not in self._doc_chunk_ids:
+                self._doc_chunk_ids[chunk.document_id] = set()
+            self._doc_chunk_ids[chunk.document_id].add(chunk.id)
+
             for term, count in term_counts.items():
                 if term not in self._inverted_index:
                     self._inverted_index[term] = {}
                 self._inverted_index[term][chunk.id] = count
+
+    async def index_chunks(self, chunks: Sequence[Chunk]) -> None:
+        """Index or update chunks in the lexical search index.
+
+        If a chunk with an existing chunk ID is indexed, its prior term contributions,
+        postings, and length metadata are purged before re-indexing to prevent stale postings.
+
+        Args:
+            chunks: Sequence of domain Chunk objects to index.
+        """
+        if not chunks:
+            return
+        self._ensure_loaded()
+        self._index_chunks_internal(chunks)
+        self._save_to_disk()
 
     def _matches_filters(self, chunk: Chunk, filters: dict[str, Any]) -> bool:
         """Evaluate whether a chunk satisfies the provided filter dictionary."""
@@ -193,6 +342,8 @@ class BM25LexicalIndex(BaseLexicalIndex):
 
         if not query or not query.strip():
             return []
+
+        self._ensure_loaded()
 
         if not self._chunks or self._total_doc_len == 0:
             return []
