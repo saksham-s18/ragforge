@@ -259,3 +259,65 @@ async def test_qdrant_in_memory_full_lifecycle() -> None:
     # Clear
     await store.clear()
     assert await store.count() == 0
+
+
+@pytest.mark.asyncio
+async def test_qdrant_get_by_document_id() -> None:
+    """Verify get_by_document_id retrieves all chunks for a document in Qdrant."""
+    client = AsyncQdrantClient(location=":memory:")
+    store = QdrantVectorStore(
+        client=client,
+        collection_name="doc_chunks_col",
+        dimension=4,
+    )
+    await store.init_collection()
+
+    doc1_id = uuid4()
+    doc2_id = uuid4()
+
+    c1 = _create_chunk(dim=4, document_id=doc1_id, content="Doc 1 Chunk 0")
+    c2 = _create_chunk(dim=4, document_id=doc1_id, content="Doc 1 Chunk 1")
+    c3 = _create_chunk(dim=4, document_id=doc2_id, content="Doc 2 Chunk 0")
+
+    await store.upsert([c1, c2, c3])
+
+    doc1_chunks = await store.get_by_document_id(doc1_id)
+    assert len(doc1_chunks) == 2
+    assert {c.id for c in doc1_chunks} == {c1.id, c2.id}
+    # Verify content and metadata survived
+    assert {c.content for c in doc1_chunks} == {"Doc 1 Chunk 0", "Doc 1 Chunk 1"}
+    assert all(
+        c.dense_vector is not None and c.dense_vector == pytest.approx([0.5] * 4)
+        for c in doc1_chunks
+    )
+
+    doc2_chunks = await store.get_by_document_id(doc2_id)
+    assert len(doc2_chunks) == 1
+    assert doc2_chunks[0].id == c3.id
+
+    empty_chunks = await store.get_by_document_id(uuid4())
+    assert empty_chunks == []
+
+
+@pytest.mark.asyncio
+async def test_qdrant_close_owned_client() -> None:
+    """Verify close() closes the underlying AsyncQdrantClient when owned."""
+    store = QdrantVectorStore(url="http://localhost:6333", dimension=4)
+    assert store._owned_client is True
+
+    mock_client = AsyncMock()
+    store._client = mock_client
+
+    await store.close()
+    mock_client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_qdrant_close_unowned_client() -> None:
+    """Verify close() does not close an externally injected AsyncQdrantClient."""
+    mock_client = AsyncMock(spec=AsyncQdrantClient)
+    store = QdrantVectorStore(client=mock_client, dimension=4)
+    assert store._owned_client is False
+
+    await store.close()
+    mock_client.close.assert_not_called()

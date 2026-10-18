@@ -142,6 +142,8 @@ class DeterministicReranker(BaseReranker):
                 retrieval_type=item.retrieval_type,
                 rank=new_rank,
                 rerank_score=rerank_score,
+                dense_score=item.dense_score,
+                lexical_score=item.lexical_score,
             )
             for new_rank, (item, rerank_score) in enumerate(selected, start=1)
         ]

@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -128,6 +128,51 @@ class Settings(BaseSettings):
         gt=0,
         description="Final number of top reranked chunks to select for RAG context",
     )
+
+    # Hybrid Retrieval Settings (Stage 11)
+    hybrid_enabled: bool = Field(
+        default=False,
+        description="Enable hybrid retrieval (dense + lexical BM25 with score fusion)",
+    )
+    lexical_index_file: str = Field(
+        default=".ragforge/lexical_index.json",
+        description="Path to JSON file persisting lexical BM25 index state and chunks",
+    )
+    fusion_strategy: str = Field(
+        default="rrf",
+        description="Fusion strategy identifier for multi-channel retrieval (currently 'rrf')",
+    )
+    rrf_k: int = Field(
+        default=60,
+        gt=0,
+        description="Rank smoothing constant k for reciprocal rank fusion",
+    )
+    rrf_dense_weight: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Weight multiplier for dense retrieval scores in RRF",
+    )
+    rrf_lexical_weight: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Weight multiplier for lexical retrieval scores in RRF",
+    )
+    hybrid_candidate_k: int = Field(
+        default=20,
+        gt=0,
+        description="Candidate pool size retrieved from hybrid channels prior to top-k selection",
+    )
+
+    @field_validator("fusion_strategy")
+    @classmethod
+    def validate_fusion_strategy(cls, v: str) -> str:
+        """Validate that the configured fusion strategy is currently supported."""
+        strategy = v.strip().lower()
+        if strategy != "rrf":
+            raise ValueError(
+                f"Unsupported fusion strategy '{v}'. Only 'rrf' is currently supported."
+            )
+        return strategy
 
 
 @lru_cache

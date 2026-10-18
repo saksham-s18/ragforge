@@ -88,6 +88,7 @@ __all__ = [
     "Query",
     "RAGForgeError",
     "RAGGenerationError",
+    "RerankingError",
     "RAGQueryRequest",
     "RAGResponse",
     "RerankingError",

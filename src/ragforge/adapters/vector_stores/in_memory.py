@@ -40,6 +40,10 @@ class InMemoryVectorStore(BaseVectorStore):
         """Remove all chunks from the in-memory store."""
         self._storage.clear()
 
+    async def close(self) -> None:
+        """Release in-memory storage resources."""
+        self._storage.clear()
+
     async def delete_by_chunk_id(self, chunk_id: UUID) -> bool:
         """Delete a single chunk by its ID. Returns True if deleted, False if not found."""
         if chunk_id in self._storage:
@@ -54,6 +58,10 @@ class InMemoryVectorStore(BaseVectorStore):
         ]
         for cid in to_delete:
             del self._storage[cid]
+
+    async def get_by_document_id(self, document_id: UUID) -> list[Chunk]:
+        """Retrieve all chunks associated with a document ID."""
+        return [chunk for chunk in self._storage.values() if chunk.document_id == document_id]
 
     async def upsert(self, chunks: Sequence[Chunk]) -> None:
         """Store or update chunks along with their dense vector embeddings.

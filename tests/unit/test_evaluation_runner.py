@@ -1,12 +1,16 @@
 """Unit tests for EvaluationRunner and end-to-end retrieval evaluation workflows."""
 
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
 
 from ragforge.adapters.embeddings import DeterministicEmbeddingProvider
+from ragforge.adapters.fusion import ReciprocalRankFusion
+from ragforge.adapters.lexical import BM25LexicalIndex
 from ragforge.adapters.rerankers import DeterministicReranker
 from ragforge.adapters.vector_stores import InMemoryVectorStore
+from ragforge.domain.enums import SearchStrategy
 from ragforge.domain.exceptions import DatasetValidationError
 from ragforge.domain.models import (
     Chunk,
@@ -386,3 +390,97 @@ def test_evaluation_runner_rejects_non_positive_candidate_k() -> None:
 
     with pytest.raises(ValueError, match="candidate_k must be positive, got -5"):
         EvaluationRunner(retrieval_service=retrieval_service, candidate_k=-5)
+
+
+@pytest.mark.asyncio
+async def test_evaluation_runner_passes_configured_search_strategy_to_retrieval_service() -> None:
+    """Verify EvaluationRunner forwards search_strategy to RetrievalService.retrieve."""
+    mock_retrieval = AsyncMock(spec=RetrievalService)
+    mock_retrieval.retrieve.return_value = []
+
+    runner = EvaluationRunner(
+        retrieval_service=mock_retrieval,
+        k_values=[1, 3],
+        search_strategy=SearchStrategy.HYBRID,
+    )
+
+    case = EvaluationCase(
+        question="What is hybrid retrieval?",
+        expected_sources=["doc.txt"],
+    )
+
+    await runner.evaluate_case(case)
+
+    mock_retrieval.retrieve.assert_awaited_once_with(
+        query="What is hybrid retrieval?",
+        top_k=3,
+        search_strategy=SearchStrategy.HYBRID,
+    )
+
+
+@pytest.mark.asyncio
+async def test_evaluation_runner_hybrid_retrieval_ranking_differs_from_dense() -> None:
+    """Verify EvaluationRunner reflects ranking changes between dense and hybrid retrieval."""
+    provider = DeterministicEmbeddingProvider(dimension=64)
+    store = InMemoryVectorStore(dimension=64)
+    lexical = BM25LexicalIndex()
+    fusion = ReciprocalRankFusion(k=60, dense_weight=1.0, lexical_weight=2.0)
+
+    retrieval_service = RetrievalService(
+        embedding_provider=provider,
+        vector_store=store,
+        lexical_index=lexical,
+        fusion=fusion,
+        default_search_strategy=SearchStrategy.DENSE,
+    )
+
+    doc_a_id = UUID("aaaaaaaa-1111-1111-1111-111111111111")
+    doc_b_id = UUID("bbbbbbbb-2222-2222-2222-222222222222")
+
+    ca = Chunk(
+        id=UUID("caaaaaaa-1111-1111-1111-111111111111"),
+        document_id=doc_a_id,
+        chunk_index=0,
+        content="golang programming language compiler syntax runtime",
+        token_count=6,
+        content_hash="ha",
+        metadata=ChunkMetadata(extra={"file_path": "doc_a.txt"}),
+    )
+    cb = Chunk(
+        id=UUID("cbbbbbbb-2222-2222-2222-222222222222"),
+        document_id=doc_b_id,
+        chunk_index=0,
+        content="guide to using golang and elixir together for backend services",
+        token_count=10,
+        content_hash="hb",
+        metadata=ChunkMetadata(extra={"file_path": "doc_b.txt"}),
+    )
+
+    await retrieval_service.index_chunks([ca, cb])
+
+    case = EvaluationCase(
+        question="golang elixir",
+        expected_sources=["doc_b.txt"],
+    )
+
+    runner_dense = EvaluationRunner(
+        retrieval_service=retrieval_service,
+        k_values=[1, 2],
+        search_strategy=SearchStrategy.DENSE,
+    )
+    res_dense = await runner_dense.evaluate_case(case)
+    # Dense retrieval ranks doc_a above doc_b, so rank 1 is not relevant for doc_b
+    assert res_dense.first_relevant_rank == 2
+    assert res_dense.recall_at_k[1] == 0.0
+    assert res_dense.reciprocal_rank == 0.5
+
+    runner_hybrid = EvaluationRunner(
+        retrieval_service=retrieval_service,
+        k_values=[1, 2],
+        search_strategy=SearchStrategy.HYBRID,
+    )
+    res_hybrid = await runner_hybrid.evaluate_case(case)
+    # Hybrid retrieval promotes doc_b to rank 1 due to 2-term lexical match
+    assert res_hybrid.first_relevant_rank == 1
+    assert res_hybrid.recall_at_k[1] == 1.0
+    assert res_hybrid.reciprocal_rank == 1.0

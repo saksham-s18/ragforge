@@ -7,6 +7,7 @@ import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from ragforge.domain.enums import SearchStrategy
 from ragforge.domain.models import (
     CaseEvaluationResult,
     EvaluationCase,
@@ -42,6 +43,7 @@ class EvaluationRunner:
         k_values: Sequence[int] | None = None,
         reranker: BaseReranker | None = None,
         candidate_k: int | None = None,
+        search_strategy: SearchStrategy | None = None,
     ) -> None:
         """Initialize the evaluation runner.
 
@@ -50,6 +52,7 @@ class EvaluationRunner:
             k_values: Sequence of K cutoff values (defaults to [1, 3, 5]).
             reranker: Optional BaseReranker port to evaluate second-stage reranking.
             candidate_k: Optional candidate retrieval depth before reranking.
+            search_strategy: Optional search strategy override (DENSE, SPARSE, HYBRID).
 
         Raises:
             ValueError: If k_values contains non-positive numbers or is empty,
@@ -60,6 +63,7 @@ class EvaluationRunner:
         self._retrieval_service = retrieval_service
         self._reranker = reranker
         self._candidate_k = candidate_k
+        self._search_strategy = search_strategy
         raw_k = list(k_values) if k_values is not None else [1, 3, 5]
         if not raw_k or any(k <= 0 for k in raw_k):
             raise ValueError(f"k_values must be non-empty positive integers, got {raw_k}")
@@ -93,6 +97,7 @@ class EvaluationRunner:
             candidate_chunks = await self._retrieval_service.retrieve(
                 query=case.question,
                 top_k=candidate_depth,
+                search_strategy=self._search_strategy,
             )
             retrieved_chunks = await self._reranker.rerank(
                 query=case.question,
@@ -103,6 +108,7 @@ class EvaluationRunner:
             retrieved_chunks = await self._retrieval_service.retrieve(
                 query=case.question,
                 top_k=effective_top_k,
+                search_strategy=self._search_strategy,
             )
 
         return evaluate_case_relevance(

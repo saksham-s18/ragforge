@@ -64,6 +64,8 @@ class RetrievedChunk(BaseModel):
     score: float
     retrieval_type: str = "dense"
     rank: int
+    dense_score: float | None = None
+    lexical_score: float | None = None
     rerank_score: float | None = None
 
 
@@ -254,6 +256,7 @@ class RAGQueryRequest(BaseModel):
     score_threshold: float | None = None
     temperature: float = 0.0
     max_tokens: int | None = None
+    search_strategy: SearchStrategy | None = None
 
 
 class EvaluationCase(BaseModel):

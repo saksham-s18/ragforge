@@ -2,7 +2,7 @@ import hashlib
 import logging
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -28,6 +28,7 @@ from ragforge.domain.models import (
 )
 from ragforge.ports.chunkers import BaseChunker
 from ragforge.ports.embeddings import BaseEmbeddingProvider
+from ragforge.ports.lexical import BaseLexicalIndex
 from ragforge.ports.loaders import BaseDocumentLoader
 from ragforge.ports.state import BaseIndexStateStore
 from ragforge.ports.vector_store import BaseVectorStore
@@ -88,6 +89,8 @@ class _PreparedDoc:
     is_update: bool
     old_document_id: UUID | None
     content_hash: str
+    existing_vector_chunks: list[Chunk] = field(default_factory=list)
+    existing_lexical_chunks: list[Chunk] = field(default_factory=list)
 
 
 class IndexingService:
@@ -106,6 +109,7 @@ class IndexingService:
         loaders: dict[str, BaseDocumentLoader] | None = None,
         state_store: BaseIndexStateStore | None = None,
         batch_size: int = 32,
+        lexical_index: BaseLexicalIndex | None = None,
     ) -> None:
         """Initialize the indexing service.
 
@@ -116,6 +120,7 @@ class IndexingService:
             loaders: Mapping of extension to loader adapters.
             state_store: State persistence adapter (defaults to InMemoryIndexStateStore).
             batch_size: Batch size for embedding and upsert operations (must be > 0).
+            lexical_index: Optional lexical index adapter for hybrid/BM25 retrieval.
 
         Raises:
             ValueError: If batch_size <= 0.
@@ -128,6 +133,7 @@ class IndexingService:
         self._chunker = chunker or DeterministicChunker()
         self._state_store = state_store or InMemoryIndexStateStore()
         self._batch_size = batch_size
+        self._lexical_index = lexical_index
 
         if loaders is not None:
             self._loaders = loaders
@@ -309,10 +315,16 @@ class IndexingService:
 
             # Incremental change detection via state store
             existing_record = await self._state_store.get(path_str)
+            lexical_missing = False
+            if self._lexical_index is not None and existing_record is not None:
+                has_doc = await self._lexical_index.has_document(existing_record.document_id)
+                lexical_missing = not has_doc
+
             if (
                 not force
                 and existing_record is not None
                 and existing_record.content_hash == content_hash
+                and not lexical_missing
             ):
                 skipped_count += 1
                 doc_results.append(
@@ -388,18 +400,61 @@ class IndexingService:
                 for chunk, vec in zip(batch_chunks, vectors, strict=True):
                     chunk.dense_vector = vec
 
-        # Phase 3: Vector Store Upsert & Safe Stale Chunk Removal
-        # Upsert chunks into vector store FIRST in batches
-        if all_chunks:
-            for i in range(0, len(all_chunks), self._batch_size):
-                batch_chunks = all_chunks[i : i + self._batch_size]
-                await self._vector_store.upsert(batch_chunks)
-            vectors_upserted_count = len(all_chunks)
-
-        # Remove stale chunks for updated documents ONLY after new upsert succeeds
+        # Snapshot pre-existing chunks for any documents being updated or re-indexed
         for p in prepared_docs:
-            if p.is_update and p.old_document_id is not None and p.old_document_id != p.doc.id:
-                await self._vector_store.delete_by_document_id(p.old_document_id)
+            if p.is_update and p.old_document_id is not None:
+                p.existing_vector_chunks = await self._vector_store.get_by_document_id(
+                    p.old_document_id
+                )
+                if self._lexical_index is not None:
+                    p.existing_lexical_chunks = await self._lexical_index.get_by_document_id(
+                        p.old_document_id
+                    )
+
+        # Phase 3: Vector Store Upsert & Lexical Index Synchronization
+        if all_chunks:
+            # 1. Upsert chunks into vector store in batches
+            try:
+                for i in range(0, len(all_chunks), self._batch_size):
+                    batch_chunks = all_chunks[i : i + self._batch_size]
+                    await self._vector_store.upsert(batch_chunks)
+                vectors_upserted_count = len(all_chunks)
+            except Exception as vec_exc:
+                logger.error(
+                    "Vector store upsert failed: %s. Attempting rollback.",
+                    vec_exc,
+                )
+                await self._rollback_prepared_docs(prepared_docs)
+                raise
+
+            # 2. Upsert chunks into lexical index
+            if self._lexical_index is not None:
+                try:
+                    await self._lexical_index.index_chunks(all_chunks)
+                except Exception as exc:
+                    logger.error(
+                        "Lexical indexing failed after vector upsert: %s. Attempting rollback.",
+                        exc,
+                    )
+                    await self._rollback_prepared_docs(prepared_docs)
+                    raise
+
+        # Remove stale chunks for updated documents ONLY after both new upserts succeed
+        for p in prepared_docs:
+            if p.is_update and p.old_document_id is not None:
+                if p.old_document_id != p.doc.id:
+                    await self._vector_store.delete_by_document_id(p.old_document_id)
+                    if self._lexical_index is not None:
+                        await self._lexical_index.delete_by_document_id(p.old_document_id)
+                else:
+                    new_chunk_ids = {c.id for c in p.chunks}
+                    stale_chunk_ids = [
+                        c.id for c in p.existing_vector_chunks if c.id not in new_chunk_ids
+                    ]
+                    for scid in stale_chunk_ids:
+                        await self._vector_store.delete_by_chunk_id(scid)
+                        if self._lexical_index is not None:
+                            await self._lexical_index.delete_by_chunk_id(scid)
 
         # Phase 4: State Store Updates and Reporting
         for p in prepared_docs:
@@ -467,3 +522,78 @@ class IndexingService:
             documents=doc_results,
             errors=error_messages,
         )
+
+    async def delete_document(self, path: str | Path) -> bool:
+        """Remove a document from the vector store, lexical index, and state store.
+
+        Args:
+            path: Path to the document file to delete.
+
+        Returns:
+            True if document was found in state store and deleted, False otherwise.
+        """
+        resolved_path = str(Path(path).resolve())
+        record = await self._state_store.get(resolved_path)
+        if record is None:
+            return False
+
+        await self._vector_store.delete_by_document_id(record.document_id)
+        if self._lexical_index is not None:
+            await self._lexical_index.delete_by_document_id(record.document_id)
+        await self._state_store.delete(resolved_path)
+        logger.info(
+            "Deleted document %s (id: %s) from all stores",
+            resolved_path,
+            record.document_id,
+        )
+        return True
+
+    async def _rollback_prepared_docs(self, prepared_docs: Sequence[_PreparedDoc]) -> None:
+        """Best-effort rollback of prepared docs preserving pre-existing committed chunks."""
+        for p in prepared_docs:
+            if p.is_update and p.old_document_id is not None and p.old_document_id == p.doc.id:
+                # Forced reindex with same document ID:
+                # Purge newly inserted/overwritten chunks and restore original committed snapshot
+                try:
+                    await self._vector_store.delete_by_document_id(p.doc.id)
+                    if p.existing_vector_chunks:
+                        await self._vector_store.upsert(p.existing_vector_chunks)
+                except Exception as rb_exc:
+                    logger.error(
+                        "Vector store rollback/restore failed for document %s: %s",
+                        p.doc.id,
+                        rb_exc,
+                    )
+
+                if self._lexical_index is not None:
+                    try:
+                        await self._lexical_index.delete_by_document_id(p.doc.id)
+                        if p.existing_lexical_chunks:
+                            await self._lexical_index.index_chunks(p.existing_lexical_chunks)
+                    except Exception as rb_lex_exc:
+                        logger.error(
+                            "Lexical index rollback/restore failed for document %s: %s",
+                            p.doc.id,
+                            rb_lex_exc,
+                        )
+            else:
+                # Brand new document OR update with old_document_id != doc.id:
+                # Pre-existing chunks are under old_document_id and were never modified.
+                # Only delete the newly introduced chunks under p.doc.id.
+                try:
+                    await self._vector_store.delete_by_document_id(p.doc.id)
+                except Exception as rb_exc:
+                    logger.error(
+                        "Rollback failed for document %s in vector store: %s",
+                        p.doc.id,
+                        rb_exc,
+                    )
+                if self._lexical_index is not None:
+                    try:
+                        await self._lexical_index.delete_by_document_id(p.doc.id)
+                    except Exception as rb_lex_exc:
+                        logger.error(
+                            "Rollback failed for document %s in lexical index: %s",
+                            p.doc.id,
+                            rb_lex_exc,
+                        )

@@ -25,3 +25,15 @@ class BaseVectorStore(ABC):
     @abstractmethod
     async def delete_by_document_id(self, document_id: UUID) -> None:
         """Delete all indexed chunks associated with a document ID."""
+
+    @abstractmethod
+    async def delete_by_chunk_id(self, chunk_id: UUID) -> bool:
+        """Delete a single chunk by its ID. Returns True if deleted, False if not found."""
+
+    @abstractmethod
+    async def get_by_document_id(self, document_id: UUID) -> list[Chunk]:
+        """Retrieve all indexed chunks associated with a document ID."""
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Release underlying client connections or resources."""
