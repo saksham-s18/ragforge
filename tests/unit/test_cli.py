@@ -217,6 +217,48 @@ def test_cli_api_lifecycle_live_reload(
         get_settings.cache_clear()
 
 
+@pytest.mark.asyncio
+async def test_cli_index_in_memory_uses_non_persistent_lexical_when_unspecified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify execute_indexing with --in-memory uses index_file=None
+    when lexical file is not specified.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from ragforge.cli import execute_indexing
+
+    doc_dir = tmp_path / "docs"
+    doc_dir.mkdir()
+    (doc_dir / "sample.txt").write_text("sample content", encoding="utf-8")
+
+    monkeypatch.setenv("RAGFORGE_HYBRID_ENABLED", "true")
+    from ragforge.core.config import get_settings
+
+    get_settings.cache_clear()
+
+    try:
+        parser = build_parser()
+        args = parser.parse_args(["index", str(doc_dir), "--in-memory"])
+        settings = get_settings()
+
+        with (
+            patch("ragforge.cli.IndexingService") as mock_idx_cls,
+            patch("ragforge.cli.FastEmbedProvider"),
+            patch("ragforge.cli.DeterministicEmbeddingProvider"),
+        ):
+            mock_service = mock_idx_cls.return_value
+            mock_service.index_path = AsyncMock()
+            await execute_indexing(args, settings)
+
+            _, kwargs = mock_idx_cls.call_args
+            lexical = kwargs["lexical_index"]
+            assert lexical is not None
+            assert lexical.index_file is None
+    finally:
+        get_settings.cache_clear()
+
+
 def test_cli_no_args_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = main([])
     assert exit_code == 0

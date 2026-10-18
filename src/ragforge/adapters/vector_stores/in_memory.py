@@ -40,6 +40,10 @@ class InMemoryVectorStore(BaseVectorStore):
         """Remove all chunks from the in-memory store."""
         self._storage.clear()
 
+    async def close(self) -> None:
+        """Release in-memory storage resources."""
+        self._storage.clear()
+
     async def delete_by_chunk_id(self, chunk_id: UUID) -> bool:
         """Delete a single chunk by its ID. Returns True if deleted, False if not found."""
         if chunk_id in self._storage:

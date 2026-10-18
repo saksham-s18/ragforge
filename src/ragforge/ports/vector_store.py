@@ -33,3 +33,7 @@ class BaseVectorStore(ABC):
     @abstractmethod
     async def get_by_document_id(self, document_id: UUID) -> list[Chunk]:
         """Retrieve all indexed chunks associated with a document ID."""
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Release underlying client connections or resources."""

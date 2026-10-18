@@ -2,20 +2,27 @@
 
 from collections.abc import Generator
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from fastapi import Request
 
 from ragforge.adapters.fusion import ReciprocalRankFusion
 from ragforge.adapters.lexical import BM25LexicalIndex
 from ragforge.adapters.rerankers import DeterministicReranker
+from ragforge.adapters.vector_stores import QdrantVectorStore
+from ragforge.api.app import create_app
 from ragforge.api.dependencies import (
+    get_embedding_provider,
     get_fusion,
     get_indexing_service,
     get_lexical_index,
+    get_primary_llm_provider,
     get_rag_service,
+    get_reranker,
     get_retrieval_service,
+    get_vector_store,
     reset_dependencies,
 )
 from ragforge.core.config import Settings
@@ -378,3 +385,137 @@ async def test_hybrid_and_reranking_wiring_end_to_end() -> None:
         assert src.rerank_score is not None
         assert src.source_path is not None
         assert src.document_title is not None
+
+
+# ---------------------------------------------------------------------------
+# Issue 1: Adapter Reuse, App Scoping, and Qdrant Lifespan Shutdown
+# ---------------------------------------------------------------------------
+
+
+def test_request_independent_adapters_reused_per_app() -> None:
+    """Verify adapters and services are cached on app.state and reused across requests."""
+    settings = Settings(
+        groq_api_key="gsk_test_mock_key_12345",
+        hybrid_enabled=True,
+        reranking_enabled=True,
+        _env_file=None,
+    )
+    app = create_app(settings=settings)
+
+    req1 = Request(scope={"type": "http", "app": app})
+    req2 = Request(scope={"type": "http", "app": app})
+
+    # Vector store
+    vs1 = get_vector_store(request=req1)
+    vs2 = get_vector_store(request=req2)
+    assert vs1 is vs2
+
+    # Embedding provider
+    ep1 = get_embedding_provider(request=req1)
+    ep2 = get_embedding_provider(request=req2)
+    assert ep1 is ep2
+
+    # Primary LLM provider
+    llm1 = get_primary_llm_provider(request=req1)
+    llm2 = get_primary_llm_provider(request=req2)
+    assert llm1 is llm2
+
+    # Lexical index
+    lex1 = get_lexical_index(request=req1)
+    lex2 = get_lexical_index(request=req2)
+    assert lex1 is not None
+    assert lex1 is lex2
+
+    # Fusion
+    fus1 = get_fusion(request=req1)
+    fus2 = get_fusion(request=req2)
+    assert fus1 is not None
+    assert fus1 is fus2
+
+    # Reranker
+    rerank1 = get_reranker(request=req1)
+    rerank2 = get_reranker(request=req2)
+    assert rerank1 is not None
+    assert rerank1 is rerank2
+
+    # Composite services
+    ret1 = get_retrieval_service(request=req1)
+    ret2 = get_retrieval_service(request=req2)
+    assert ret1 is ret2
+
+    idx1 = get_indexing_service(request=req1)
+    idx2 = get_indexing_service(request=req2)
+    assert idx1 is idx2
+
+    rag1 = get_rag_service(request=req1)
+    rag2 = get_rag_service(request=req2)
+    assert rag1 is rag2
+
+
+def test_app_isolation_no_leakage() -> None:
+    """Verify different application instances have isolated state and no leakage."""
+    settings1 = Settings(
+        qdrant_collection="collection_alpha",
+        groq_api_key="gsk_key_alpha",
+        _env_file=None,
+    )
+    settings2 = Settings(
+        qdrant_collection="collection_beta",
+        groq_api_key="gsk_key_beta",
+        _env_file=None,
+    )
+    app1 = create_app(settings=settings1)
+    app2 = create_app(settings=settings2)
+
+    req1 = Request(scope={"type": "http", "app": app1})
+    req2 = Request(scope={"type": "http", "app": app2})
+
+    store1 = get_vector_store(request=req1)
+    store2 = get_vector_store(request=req2)
+
+    assert store1 is not store2
+    assert isinstance(store1, QdrantVectorStore)
+    assert isinstance(store2, QdrantVectorStore)
+    assert store1.collection_name == "collection_alpha"
+    assert store2.collection_name == "collection_beta"
+
+
+@pytest.mark.asyncio
+async def test_lifespan_closes_owned_vector_store() -> None:
+    """Verify application lifespan shutdown closes owned vector store client."""
+    settings = Settings(
+        groq_api_key="gsk_test_mock_key_12345",
+        _env_file=None,
+    )
+    app = create_app(settings=settings)
+
+    async with app.router.lifespan_context(app):
+        req = Request(scope={"type": "http", "app": app})
+        store = get_vector_store(request=req)
+        assert isinstance(store, QdrantVectorStore)
+        mock_client = AsyncMock()
+        store._client = mock_client
+        store._owned_client = True
+
+    # After exiting lifespan context, store._client.close must have been awaited
+    mock_client.close.assert_awaited_once()
+
+
+def test_dependency_overrides_respected_by_composite_services() -> None:
+    """Verify FastAPI dependency_overrides are honored by downstream service factories."""
+    settings = Settings(
+        groq_api_key="gsk_test_mock_key_12345",
+        _env_file=None,
+    )
+    app = create_app(settings=settings)
+    mock_store = MagicMock()
+    app.dependency_overrides[get_vector_store] = lambda: mock_store
+
+    req = Request(scope={"type": "http", "app": app})
+    assert get_vector_store(request=req) is mock_store
+
+    retrieval = get_retrieval_service(request=req)
+    assert retrieval._vector_store is mock_store
+
+    indexing = get_indexing_service(request=req)
+    assert indexing._vector_store is mock_store

@@ -306,7 +306,15 @@ async def execute_indexing(args: argparse.Namespace, settings: Settings) -> Inde
             is_hybrid = True
 
         if is_hybrid:
-            lexical_file = getattr(args, "lexical_index_file", None) or settings.lexical_index_file
+            if (
+                getattr(args, "in_memory", False)
+                and getattr(args, "lexical_index_file", None) is None
+            ):
+                lexical_file = None
+            else:
+                lexical_file = (
+                    getattr(args, "lexical_index_file", None) or settings.lexical_index_file
+                )
             lexical_index = BM25LexicalIndex(index_file=lexical_file)
 
         # Instantiate Indexing Service
@@ -445,8 +453,17 @@ async def execute_retrieval_evaluation(
         fusion: BaseScoreFusion | None = None
         eval_strategy = SearchStrategy.HYBRID if is_hybrid else SearchStrategy.DENSE
         if is_hybrid:
-            lexical_file = getattr(args, "lexical_index_file", None) or settings.lexical_index_file
+            if (
+                getattr(args, "in_memory", False)
+                and getattr(args, "lexical_index_file", None) is None
+            ):
+                lexical_file = None
+            else:
+                lexical_file = (
+                    getattr(args, "lexical_index_file", None) or settings.lexical_index_file
+                )
             lexical_index = BM25LexicalIndex(index_file=lexical_file)
+
             if settings.fusion_strategy.lower() == "rrf":
                 fusion = ReciprocalRankFusion(
                     k=settings.rrf_k,

@@ -297,3 +297,27 @@ async def test_qdrant_get_by_document_id() -> None:
 
     empty_chunks = await store.get_by_document_id(uuid4())
     assert empty_chunks == []
+
+
+@pytest.mark.asyncio
+async def test_qdrant_close_owned_client() -> None:
+    """Verify close() closes the underlying AsyncQdrantClient when owned."""
+    store = QdrantVectorStore(url="http://localhost:6333", dimension=4)
+    assert store._owned_client is True
+
+    mock_client = AsyncMock()
+    store._client = mock_client
+
+    await store.close()
+    mock_client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_qdrant_close_unowned_client() -> None:
+    """Verify close() does not close an externally injected AsyncQdrantClient."""
+    mock_client = AsyncMock(spec=AsyncQdrantClient)
+    store = QdrantVectorStore(client=mock_client, dimension=4)
+    assert store._owned_client is False
+
+    await store.close()
+    mock_client.close.assert_not_called()

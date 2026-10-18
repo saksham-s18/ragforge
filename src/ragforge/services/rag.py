@@ -104,17 +104,35 @@ class RAGGenerationService:
         effective_max_tokens = max_tokens if max_tokens is not None else self._default_max_tokens
 
         use_reranking = self._reranking_enabled and (self._reranker is not None)
+        is_hybrid = search_strategy == SearchStrategy.HYBRID
+
         # 1. Determine candidate retrieval depth
-        if search_strategy == SearchStrategy.HYBRID:
+        if is_hybrid and use_reranking:
             hybrid_target = candidate_k if candidate_k is not None else self._hybrid_candidate_k
-            retrieval_k = max(hybrid_target, effective_top_k)
-        elif use_reranking:
-            rerank_target = candidate_k if candidate_k is not None else self._candidate_k
-            retrieval_k = (
-                max(rerank_target, effective_top_k)
-                if rerank_target is not None
-                else max(effective_top_k * 4, 20)
+            rerank_target = (
+                candidate_k
+                if candidate_k is not None
+                else (
+                    self._candidate_k
+                    if self._candidate_k is not None
+                    else max(effective_top_k * 4, 20)
+                )
             )
+            retrieval_k = max(effective_top_k, hybrid_target, rerank_target)
+        elif is_hybrid:
+            hybrid_target = candidate_k if candidate_k is not None else self._hybrid_candidate_k
+            retrieval_k = max(effective_top_k, hybrid_target)
+        elif use_reranking:
+            rerank_target = (
+                candidate_k
+                if candidate_k is not None
+                else (
+                    self._candidate_k
+                    if self._candidate_k is not None
+                    else max(effective_top_k * 4, 20)
+                )
+            )
+            retrieval_k = max(effective_top_k, rerank_target)
         else:
             retrieval_k = effective_top_k
 

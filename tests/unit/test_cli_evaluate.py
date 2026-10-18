@@ -391,3 +391,207 @@ def test_cli_evaluate_hybrid_differs_from_dense_ranking(
         assert parsed_hybrid["mean_reciprocal_rank"] == 1.0
     finally:
         get_settings.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# Issue 2 Regression Tests: --in-memory + --hybrid Evaluation BM25 Isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cli_evaluate_in_memory_hybrid_uses_non_persistent_index_when_unspecified(
+    tmp_path: Path,
+) -> None:
+    """Verify --in-memory --hybrid without --lexical-index-file uses
+    in-memory (index_file=None) BM25.
+    """
+    dataset_file = tmp_path / "eval_data.json"
+    dataset_file.write_text(
+        json.dumps({"cases": [{"question": "test", "expected_sources": ["a.txt"]}]}),
+        encoding="utf-8",
+    )
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "evaluate",
+            "retrieval",
+            str(dataset_file),
+            "--in-memory",
+            "--hybrid",
+        ]
+    )
+    settings = get_settings()
+
+    with (
+        patch("ragforge.cli.EvaluationRunner") as mock_runner_cls,
+        patch("ragforge.cli.RetrievalService") as mock_retrieval_cls,
+    ):
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.evaluate_dataset = AsyncMock()
+        await execute_retrieval_evaluation(args, settings)
+
+        _, r_kwargs = mock_retrieval_cls.call_args
+        lexical = r_kwargs["lexical_index"]
+        assert isinstance(lexical, BM25LexicalIndex)
+        # Must be completely in-memory, not tied to any disk file
+        assert lexical.index_file is None
+
+
+@pytest.mark.asyncio
+async def test_cli_evaluate_in_memory_hybrid_ignores_stale_lexical_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify that existing stale lexical_index.json does NOT contaminate --in-memory evaluation."""
+    stale_file = tmp_path / "stale_lexical.json"
+    stale_file.parent.mkdir(parents=True, exist_ok=True)
+    # Write a pre-existing persistent index file containing stale document
+    stale_data = {
+        "doc_count": 1,
+        "avg_doc_len": 4.0,
+        "doc_lengths": {"stale_doc": 4},
+        "df": {"stale": 1, "term": 1},
+        "idf": {"stale": 1.5, "term": 1.5},
+        "chunks": {
+            "stale_doc": {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "document_id": "22222222-2222-2222-2222-222222222222",
+                "chunk_index": 0,
+                "content": "stale term content",
+                "token_count": 3,
+                "content_hash": "stalehash",
+                "metadata": {},
+            }
+        },
+    }
+    stale_file.write_text(json.dumps(stale_data), encoding="utf-8")
+
+    # Point global settings to this stale index file
+    monkeypatch.setenv("RAGFORGE_LEXICAL_INDEX_FILE", str(stale_file))
+    get_settings.cache_clear()
+
+    try:
+        dataset_file = tmp_path / "eval_data.json"
+        dataset_file.write_text(
+            json.dumps({"cases": [{"question": "test", "expected_sources": ["a.txt"]}]}),
+            encoding="utf-8",
+        )
+        parser = build_parser()
+        # User runs --in-memory --hybrid without --lexical-index-file
+        args = parser.parse_args(
+            [
+                "evaluate",
+                "retrieval",
+                str(dataset_file),
+                "--in-memory",
+                "--hybrid",
+            ]
+        )
+        settings = get_settings()
+
+        with (
+            patch("ragforge.cli.EvaluationRunner") as mock_runner_cls,
+            patch("ragforge.cli.RetrievalService") as mock_retrieval_cls,
+        ):
+            mock_runner = mock_runner_cls.return_value
+            mock_runner.evaluate_dataset = AsyncMock()
+            await execute_retrieval_evaluation(args, settings)
+
+            _, r_kwargs = mock_retrieval_cls.call_args
+            lexical = r_kwargs["lexical_index"]
+            assert isinstance(lexical, BM25LexicalIndex)
+            # Must NOT load the stale file
+            assert lexical.index_file is None
+            assert lexical.count() == 0
+            assert "stale" not in lexical._inverted_index
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_cli_evaluate_in_memory_hybrid_explicit_lexical_file_honored(
+    tmp_path: Path,
+) -> None:
+    """Verify that when --in-memory is used with explicit --lexical-index-file,
+    the explicit path is honored.
+    """
+    explicit_file = tmp_path / "explicit_lexical.json"
+    dataset_file = tmp_path / "eval_data.json"
+    dataset_file.write_text(
+        json.dumps({"cases": [{"question": "test", "expected_sources": ["a.txt"]}]}),
+        encoding="utf-8",
+    )
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "evaluate",
+            "retrieval",
+            str(dataset_file),
+            "--in-memory",
+            "--hybrid",
+            "--lexical-index-file",
+            str(explicit_file),
+        ]
+    )
+    settings = get_settings()
+
+    with (
+        patch("ragforge.cli.EvaluationRunner") as mock_runner_cls,
+        patch("ragforge.cli.RetrievalService") as mock_retrieval_cls,
+    ):
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.evaluate_dataset = AsyncMock()
+        await execute_retrieval_evaluation(args, settings)
+
+        _, r_kwargs = mock_retrieval_cls.call_args
+        lexical = r_kwargs["lexical_index"]
+        assert isinstance(lexical, BM25LexicalIndex)
+        assert lexical.index_file == explicit_file
+
+
+@pytest.mark.asyncio
+async def test_cli_evaluate_persistent_hybrid_uses_settings_lexical_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify that standard (non in-memory) hybrid evaluation preserves
+    persistent lexical index file.
+    """
+    configured_file = tmp_path / "configured_lexical.json"
+    monkeypatch.setenv("RAGFORGE_LEXICAL_INDEX_FILE", str(configured_file))
+    get_settings.cache_clear()
+
+    try:
+        dataset_file = tmp_path / "eval_data.json"
+        dataset_file.write_text(
+            json.dumps({"cases": [{"question": "test", "expected_sources": ["a.txt"]}]}),
+            encoding="utf-8",
+        )
+        parser = build_parser()
+        # Normal evaluate without --in-memory
+        args = parser.parse_args(
+            [
+                "evaluate",
+                "retrieval",
+                str(dataset_file),
+                "--hybrid",
+            ]
+        )
+        settings = get_settings()
+
+        with (
+            patch("ragforge.cli.EvaluationRunner") as mock_runner_cls,
+            patch("ragforge.cli.RetrievalService") as mock_retrieval_cls,
+            patch("ragforge.cli.QdrantVectorStore") as mock_vector_store_cls,
+        ):
+            mock_runner = mock_runner_cls.return_value
+            mock_runner.evaluate_dataset = AsyncMock()
+            mock_store = mock_vector_store_cls.return_value
+            mock_store.init_collection = AsyncMock()
+
+            await execute_retrieval_evaluation(args, settings)
+
+            _, r_kwargs = mock_retrieval_cls.call_args
+            lexical = r_kwargs["lexical_index"]
+            assert isinstance(lexical, BM25LexicalIndex)
+            assert lexical.index_file == configured_file
+    finally:
+        get_settings.cache_clear()

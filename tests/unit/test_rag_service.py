@@ -527,3 +527,219 @@ async def test_hybrid_candidate_k_20_reaches_reranker_and_yields_5_final_results
     assert "[Document 1]" in llm_provider.last_request.prompt
     assert "[Document 5]" in llm_provider.last_request.prompt
     assert "[Document 6]" not in llm_provider.last_request.prompt
+
+
+# ---------------------------------------------------------------------------
+# Issue 3 Regression Tests: Candidate Depths with Hybrid and Reranking
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_candidate_depth_hybrid_only() -> None:
+    """When only hybrid is enabled, retrieval depth must follow hybrid_candidate_k."""
+    mock_retrieval = AsyncMock(spec=RetrievalService)
+    mock_retrieval.retrieve.return_value = [make_retrieved_chunk() for _ in range(25)]
+
+    router = LLMRouter(primary_provider=MockLLMProvider())
+    rag_service = RAGGenerationService(
+        retrieval_service=mock_retrieval,
+        llm_router=router,
+        reranking_enabled=False,
+        default_top_k=5,
+        hybrid_candidate_k=25,
+        candidate_k=50,  # rerank_candidate_k should be ignored
+    )
+
+    response = await rag_service.generate_answer(
+        question="What is hybrid search?",
+        top_k=5,
+        search_strategy=SearchStrategy.HYBRID,
+    )
+
+    mock_retrieval.retrieve.assert_awaited_once_with(
+        query="What is hybrid search?",
+        top_k=25,
+        filters=None,
+        score_threshold=None,
+        search_strategy=SearchStrategy.HYBRID,
+    )
+    assert len(response.sources) == 5
+    assert response.metadata["retrieved_count"] == 25
+    assert response.metadata["top_k"] == 5
+
+
+@pytest.mark.asyncio
+async def test_candidate_depth_reranking_only() -> None:
+    """When only reranking is enabled, retrieval depth must follow rerank_candidate_k."""
+    mock_retrieval = AsyncMock(spec=RetrievalService)
+    mock_retrieval.retrieve.return_value = [make_retrieved_chunk() for _ in range(30)]
+
+    mock_reranker = AsyncMock(spec=BaseReranker)
+    mock_reranker.rerank.side_effect = lambda query, chunks, top_k: chunks[:top_k]
+
+    router = LLMRouter(primary_provider=MockLLMProvider())
+    rag_service = RAGGenerationService(
+        retrieval_service=mock_retrieval,
+        llm_router=router,
+        reranker=mock_reranker,
+        reranking_enabled=True,
+        default_top_k=5,
+        candidate_k=30,  # rerank_candidate_k
+        hybrid_candidate_k=60,  # hybrid_candidate_k should be ignored
+    )
+
+    response = await rag_service.generate_answer(
+        question="What is reranking?",
+        top_k=5,
+        search_strategy=SearchStrategy.DENSE,
+    )
+
+    mock_retrieval.retrieve.assert_awaited_once_with(
+        query="What is reranking?",
+        top_k=30,
+        filters=None,
+        score_threshold=None,
+        search_strategy=SearchStrategy.DENSE,
+    )
+    mock_reranker.rerank.assert_awaited_once()
+    assert len(mock_reranker.rerank.call_args.kwargs["chunks"]) == 30
+    assert len(response.sources) == 5
+
+
+@pytest.mark.asyncio
+async def test_candidate_depth_hybrid_and_reranking_rerank_larger() -> None:
+    """When hybrid + reranking are both enabled and rerank_candidate_k > hybrid_candidate_k,
+    retrieval depth accounts for BOTH and retrieves max(top_k, hybrid_k, rerank_k) = rerank_k.
+    """
+    candidates = [make_retrieved_chunk(content=f"Chunk {i}") for i in range(50)]
+    mock_retrieval = AsyncMock(spec=RetrievalService)
+    mock_retrieval.retrieve.return_value = candidates
+
+    mock_reranker = AsyncMock(spec=BaseReranker)
+    mock_reranker.rerank.side_effect = lambda query, chunks, top_k: chunks[:top_k]
+
+    router = LLMRouter(primary_provider=MockLLMProvider())
+    rag_service = RAGGenerationService(
+        retrieval_service=mock_retrieval,
+        llm_router=router,
+        reranker=mock_reranker,
+        reranking_enabled=True,
+        default_top_k=5,
+        hybrid_candidate_k=20,
+        candidate_k=50,  # rerank_candidate_k > hybrid_candidate_k
+    )
+
+    response = await rag_service.generate_answer(
+        question="Hybrid and reranking combined",
+        top_k=5,
+        search_strategy=SearchStrategy.HYBRID,
+    )
+
+    mock_retrieval.retrieve.assert_awaited_once_with(
+        query="Hybrid and reranking combined",
+        top_k=50,
+        filters=None,
+        score_threshold=None,
+        search_strategy=SearchStrategy.HYBRID,
+    )
+    # Reranker receives full candidate pool of 50
+    mock_reranker.rerank.assert_awaited_once()
+    assert len(mock_reranker.rerank.call_args.kwargs["chunks"]) == 50
+    assert mock_reranker.rerank.call_args.kwargs["top_k"] == 5
+    assert len(response.sources) == 5
+    assert response.metadata["retrieved_count"] == 50
+    assert response.metadata["top_k"] == 5
+
+
+@pytest.mark.asyncio
+async def test_candidate_depth_hybrid_and_reranking_hybrid_larger() -> None:
+    """When hybrid + reranking are both enabled and hybrid_candidate_k > rerank_candidate_k,
+    retrieval depth accounts for BOTH and retrieves max(top_k, hybrid_k, rerank_k) = hybrid_k.
+    """
+    candidates = [make_retrieved_chunk(content=f"Chunk {i}") for i in range(40)]
+    mock_retrieval = AsyncMock(spec=RetrievalService)
+    mock_retrieval.retrieve.return_value = candidates
+
+    mock_reranker = AsyncMock(spec=BaseReranker)
+    mock_reranker.rerank.side_effect = lambda query, chunks, top_k: chunks[:top_k]
+
+    router = LLMRouter(primary_provider=MockLLMProvider())
+    rag_service = RAGGenerationService(
+        retrieval_service=mock_retrieval,
+        llm_router=router,
+        reranker=mock_reranker,
+        reranking_enabled=True,
+        default_top_k=5,
+        hybrid_candidate_k=40,  # hybrid_candidate_k > rerank_candidate_k
+        candidate_k=15,
+    )
+
+    response = await rag_service.generate_answer(
+        question="Hybrid depth dominates",
+        top_k=5,
+        search_strategy=SearchStrategy.HYBRID,
+    )
+
+    mock_retrieval.retrieve.assert_awaited_once_with(
+        query="Hybrid depth dominates",
+        top_k=40,
+        filters=None,
+        score_threshold=None,
+        search_strategy=SearchStrategy.HYBRID,
+    )
+    # Reranker receives full candidate pool of 40
+    mock_reranker.rerank.assert_awaited_once()
+    assert len(mock_reranker.rerank.call_args.kwargs["chunks"]) == 40
+    assert mock_reranker.rerank.call_args.kwargs["top_k"] == 5
+    assert len(response.sources) == 5
+    assert response.metadata["retrieved_count"] == 40
+    assert response.metadata["top_k"] == 5
+
+
+@pytest.mark.asyncio
+async def test_candidate_depth_explicit_top_k_smaller_than_both_candidate_depths() -> None:
+    """When explicit top_k is smaller than both candidate depths
+    (e.g. top_k=3, hybrid=20, rerank=35):
+    - Retrieval pool fetches max(3, 20, 35) = 35 candidates.
+    - Reranker receives all 35 candidates.
+    - Reranker receives target top_k=3.
+    - Final response sources count is exactly 3.
+    """
+    candidates = [make_retrieved_chunk(content=f"Chunk {i}") for i in range(35)]
+    mock_retrieval = AsyncMock(spec=RetrievalService)
+    mock_retrieval.retrieve.return_value = candidates
+
+    mock_reranker = AsyncMock(spec=BaseReranker)
+    mock_reranker.rerank.side_effect = lambda query, chunks, top_k: chunks[:top_k]
+
+    router = LLMRouter(primary_provider=MockLLMProvider())
+    rag_service = RAGGenerationService(
+        retrieval_service=mock_retrieval,
+        llm_router=router,
+        reranker=mock_reranker,
+        reranking_enabled=True,
+        default_top_k=10,
+        hybrid_candidate_k=20,
+        candidate_k=35,
+    )
+
+    response = await rag_service.generate_answer(
+        question="Small top_k query",
+        top_k=3,
+        search_strategy=SearchStrategy.HYBRID,
+    )
+
+    mock_retrieval.retrieve.assert_awaited_once_with(
+        query="Small top_k query",
+        top_k=35,
+        filters=None,
+        score_threshold=None,
+        search_strategy=SearchStrategy.HYBRID,
+    )
+    mock_reranker.rerank.assert_awaited_once()
+    assert len(mock_reranker.rerank.call_args.kwargs["chunks"]) == 35
+    assert mock_reranker.rerank.call_args.kwargs["top_k"] == 3
+    assert len(response.sources) == 3
+    assert response.metadata["retrieved_count"] == 35
+    assert response.metadata["context_count"] == 3
+    assert response.metadata["top_k"] == 3

@@ -46,6 +46,8 @@ class QdrantVectorStore(BaseVectorStore):
         self._url = url or "http://localhost:6333"
         self._api_key = api_key
 
+        self._owned_client = client is None
+
         if client is not None:
             self._client = client
         else:
@@ -56,6 +58,11 @@ class QdrantVectorStore(BaseVectorStore):
             )
 
         self._initialized = False
+
+    async def close(self) -> None:
+        """Close the underlying client connection if owned."""
+        if getattr(self, "_owned_client", False) and self._client is not None:
+            await self._client.close()
 
     async def init_collection(self) -> None:
         """Create the collection if it does not exist, and validate vector dimensionality."""
