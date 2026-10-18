@@ -168,14 +168,19 @@ class TestBaseLexicalIndexPort:
             async def has_document(self, document_id: UUID) -> bool:
                 return any(c.document_id == document_id for c in self._chunks.values())
 
+            async def get_by_document_id(self, document_id: UUID) -> list[Chunk]:
+                return [c for c in self._chunks.values() if c.document_id == document_id]
+
         index = ConcreteLexicalIndex()
         assert index.count() == 0
 
         chunk = _create_sample_chunk()
         assert await index.has_document(chunk.document_id) is False
+        assert await index.get_by_document_id(chunk.document_id) == []
         await index.index_chunks([chunk])
         assert index.count() == 1
         assert await index.has_document(chunk.document_id) is True
+        assert await index.get_by_document_id(chunk.document_id) == [chunk]
 
         results = await index.search("test", top_k=5)
         assert len(results) == 1

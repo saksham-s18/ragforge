@@ -55,6 +55,10 @@ class InMemoryVectorStore(BaseVectorStore):
         for cid in to_delete:
             del self._storage[cid]
 
+    async def get_by_document_id(self, document_id: UUID) -> list[Chunk]:
+        """Retrieve all chunks associated with a document ID."""
+        return [chunk for chunk in self._storage.values() if chunk.document_id == document_id]
+
     async def upsert(self, chunks: Sequence[Chunk]) -> None:
         """Store or update chunks along with their dense vector embeddings.
 

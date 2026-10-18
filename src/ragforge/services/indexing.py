@@ -2,7 +2,7 @@ import hashlib
 import logging
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -89,6 +89,8 @@ class _PreparedDoc:
     is_update: bool
     old_document_id: UUID | None
     content_hash: str
+    existing_vector_chunks: list[Chunk] = field(default_factory=list)
+    existing_lexical_chunks: list[Chunk] = field(default_factory=list)
 
 
 class IndexingService:
@@ -398,6 +400,17 @@ class IndexingService:
                 for chunk, vec in zip(batch_chunks, vectors, strict=True):
                     chunk.dense_vector = vec
 
+        # Snapshot pre-existing chunks for any documents being updated or re-indexed
+        for p in prepared_docs:
+            if p.is_update and p.old_document_id is not None:
+                p.existing_vector_chunks = await self._vector_store.get_by_document_id(
+                    p.old_document_id
+                )
+                if self._lexical_index is not None:
+                    p.existing_lexical_chunks = await self._lexical_index.get_by_document_id(
+                        p.old_document_id
+                    )
+
         # Phase 3: Vector Store Upsert & Lexical Index Synchronization
         if all_chunks:
             # 1. Upsert chunks into vector store in batches
@@ -411,15 +424,7 @@ class IndexingService:
                     "Vector store upsert failed: %s. Attempting rollback.",
                     vec_exc,
                 )
-                for p in prepared_docs:
-                    try:
-                        await self._vector_store.delete_by_document_id(p.doc.id)
-                    except Exception as rb_exc:
-                        logger.error(
-                            "Rollback failed for document %s in vector store: %s",
-                            p.doc.id,
-                            rb_exc,
-                        )
+                await self._rollback_prepared_docs(prepared_docs)
                 raise
 
             # 2. Upsert chunks into lexical index
@@ -431,33 +436,25 @@ class IndexingService:
                         "Lexical indexing failed after vector upsert: %s. Attempting rollback.",
                         exc,
                     )
-                    # Attempt best-effort rollback of newly upserted chunks
-                    # from both vector store and lexical index
-                    for p in prepared_docs:
-                        try:
-                            await self._vector_store.delete_by_document_id(p.doc.id)
-                        except Exception as rb_exc:
-                            logger.error(
-                                "Rollback failed for document %s in vector store: %s",
-                                p.doc.id,
-                                rb_exc,
-                            )
-                        try:
-                            await self._lexical_index.delete_by_document_id(p.doc.id)
-                        except Exception as rb_lex_exc:
-                            logger.error(
-                                "Rollback failed for document %s in lexical index: %s",
-                                p.doc.id,
-                                rb_lex_exc,
-                            )
+                    await self._rollback_prepared_docs(prepared_docs)
                     raise
 
         # Remove stale chunks for updated documents ONLY after both new upserts succeed
         for p in prepared_docs:
-            if p.is_update and p.old_document_id is not None and p.old_document_id != p.doc.id:
-                await self._vector_store.delete_by_document_id(p.old_document_id)
-                if self._lexical_index is not None:
-                    await self._lexical_index.delete_by_document_id(p.old_document_id)
+            if p.is_update and p.old_document_id is not None:
+                if p.old_document_id != p.doc.id:
+                    await self._vector_store.delete_by_document_id(p.old_document_id)
+                    if self._lexical_index is not None:
+                        await self._lexical_index.delete_by_document_id(p.old_document_id)
+                else:
+                    new_chunk_ids = {c.id for c in p.chunks}
+                    stale_chunk_ids = [
+                        c.id for c in p.existing_vector_chunks if c.id not in new_chunk_ids
+                    ]
+                    for scid in stale_chunk_ids:
+                        await self._vector_store.delete_by_chunk_id(scid)
+                        if self._lexical_index is not None:
+                            await self._lexical_index.delete_by_chunk_id(scid)
 
         # Phase 4: State Store Updates and Reporting
         for p in prepared_docs:
@@ -550,3 +547,53 @@ class IndexingService:
             record.document_id,
         )
         return True
+
+    async def _rollback_prepared_docs(self, prepared_docs: Sequence[_PreparedDoc]) -> None:
+        """Best-effort rollback of prepared docs preserving pre-existing committed chunks."""
+        for p in prepared_docs:
+            if p.is_update and p.old_document_id is not None and p.old_document_id == p.doc.id:
+                # Forced reindex with same document ID:
+                # Purge newly inserted/overwritten chunks and restore original committed snapshot
+                try:
+                    await self._vector_store.delete_by_document_id(p.doc.id)
+                    if p.existing_vector_chunks:
+                        await self._vector_store.upsert(p.existing_vector_chunks)
+                except Exception as rb_exc:
+                    logger.error(
+                        "Vector store rollback/restore failed for document %s: %s",
+                        p.doc.id,
+                        rb_exc,
+                    )
+
+                if self._lexical_index is not None:
+                    try:
+                        await self._lexical_index.delete_by_document_id(p.doc.id)
+                        if p.existing_lexical_chunks:
+                            await self._lexical_index.index_chunks(p.existing_lexical_chunks)
+                    except Exception as rb_lex_exc:
+                        logger.error(
+                            "Lexical index rollback/restore failed for document %s: %s",
+                            p.doc.id,
+                            rb_lex_exc,
+                        )
+            else:
+                # Brand new document OR update with old_document_id != doc.id:
+                # Pre-existing chunks are under old_document_id and were never modified.
+                # Only delete the newly introduced chunks under p.doc.id.
+                try:
+                    await self._vector_store.delete_by_document_id(p.doc.id)
+                except Exception as rb_exc:
+                    logger.error(
+                        "Rollback failed for document %s in vector store: %s",
+                        p.doc.id,
+                        rb_exc,
+                    )
+                if self._lexical_index is not None:
+                    try:
+                        await self._lexical_index.delete_by_document_id(p.doc.id)
+                    except Exception as rb_lex_exc:
+                        logger.error(
+                            "Rollback failed for document %s in lexical index: %s",
+                            p.doc.id,
+                            rb_lex_exc,
+                        )

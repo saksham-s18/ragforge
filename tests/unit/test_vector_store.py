@@ -289,3 +289,28 @@ async def test_vector_store_zero_vector_handling() -> None:
 
     assert len(results) == 1
     assert results[0].score == 0.0
+
+
+@pytest.mark.asyncio
+async def test_vector_store_get_by_document_id() -> None:
+    """Verify get_by_document_id returns all chunks belonging to a document."""
+    store = InMemoryVectorStore(dimension=2)
+    doc_1 = uuid4()
+    doc_2 = uuid4()
+
+    c1 = _create_chunk(dense_vector=[1.0, 0.0], document_id=doc_1)
+    c2 = _create_chunk(dense_vector=[0.0, 1.0], document_id=doc_1)
+    c3 = _create_chunk(dense_vector=[0.5, 0.5], document_id=doc_2)
+
+    await store.upsert([c1, c2, c3])
+
+    doc_1_chunks = await store.get_by_document_id(doc_1)
+    assert len(doc_1_chunks) == 2
+    assert {c.id for c in doc_1_chunks} == {c1.id, c2.id}
+
+    doc_2_chunks = await store.get_by_document_id(doc_2)
+    assert len(doc_2_chunks) == 1
+    assert doc_2_chunks[0].id == c3.id
+
+    empty_chunks = await store.get_by_document_id(uuid4())
+    assert empty_chunks == []

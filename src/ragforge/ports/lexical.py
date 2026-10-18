@@ -53,3 +53,10 @@ class BaseLexicalIndex(ABC):
         document_id: UUID,
     ) -> bool:
         """Check whether chunks for a document ID are present in the lexical index."""
+
+    @abstractmethod
+    async def get_by_document_id(
+        self,
+        document_id: UUID,
+    ) -> list[Chunk]:
+        """Retrieve all indexed chunks associated with a document ID."""

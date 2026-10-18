@@ -212,6 +212,12 @@ class BM25LexicalIndex(BaseLexicalIndex):
         self._ensure_loaded()
         return bool(self._doc_chunk_ids.get(document_id))
 
+    async def get_by_document_id(self, document_id: UUID) -> list[Chunk]:
+        """Retrieve all indexed chunks associated with a document ID."""
+        self._ensure_loaded()
+        matching_chunk_ids = list(self._doc_chunk_ids.get(document_id, set()))
+        return [self._chunks[cid] for cid in matching_chunk_ids if cid in self._chunks]
+
     async def clear(self) -> None:
         """Clear all indexed data from the lexical index."""
         self._reset_in_memory_state()

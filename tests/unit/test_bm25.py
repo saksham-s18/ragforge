@@ -262,6 +262,29 @@ class TestBM25LexicalIndex:
         assert index.count() == 1
 
     @pytest.mark.asyncio
+    async def test_get_by_document_id(self) -> None:
+        """Retrieving by document ID returns all chunks for that document, or [] if missing."""
+        index = BM25LexicalIndex()
+        doc_a = uuid4()
+        doc_b = uuid4()
+
+        c1 = _create_chunk("alpha chunk", doc_id=doc_a)
+        c2 = _create_chunk("beta chunk", doc_id=doc_a)
+        c3 = _create_chunk("gamma chunk", doc_id=doc_b)
+
+        await index.index_chunks([c1, c2, c3])
+
+        chunks_a = await index.get_by_document_id(doc_a)
+        assert len(chunks_a) == 2
+        assert {c.id for c in chunks_a} == {c1.id, c2.id}
+
+        chunks_b = await index.get_by_document_id(doc_b)
+        assert len(chunks_b) == 1
+        assert chunks_b[0].id == c3.id
+
+        assert await index.get_by_document_id(uuid4()) == []
+
+    @pytest.mark.asyncio
     async def test_clear(self) -> None:
         """Clearing the index resets all storage, lengths, and inverted index state."""
         index = BM25LexicalIndex()

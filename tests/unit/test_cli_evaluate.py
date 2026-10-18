@@ -2,10 +2,15 @@
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ragforge.cli import build_parser, main
+from ragforge.adapters.fusion import ReciprocalRankFusion
+from ragforge.adapters.lexical import BM25LexicalIndex
+from ragforge.cli import build_parser, execute_retrieval_evaluation, main
+from ragforge.core.config import get_settings
+from ragforge.domain.enums import SearchStrategy
 
 
 def test_cli_evaluate_parser_defaults() -> None:
@@ -217,3 +222,172 @@ def test_cli_evaluate_json_output(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert parsed_json["dataset_name"] == "cli_json_dataset"
     assert parsed_json["total_cases"] == 1
     assert parsed_json["mean_reciprocal_rank"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_cli_evaluate_default_uses_dense_strategy(tmp_path: Path) -> None:
+    """Verify that default evaluation uses SearchStrategy.DENSE without lexical or fusion."""
+    dataset_file = tmp_path / "dataset.json"
+    dataset_file.write_text(
+        json.dumps(
+            {
+                "cases": [
+                    {"question": "What is Python?", "expected_sources": ["doc.txt"]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    parser = build_parser()
+    args = parser.parse_args(["evaluate", "retrieval", str(dataset_file), "--in-memory"])
+    settings = get_settings()
+
+    with (
+        patch("ragforge.cli.EvaluationRunner") as mock_runner_cls,
+        patch("ragforge.cli.RetrievalService") as mock_retrieval_cls,
+    ):
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.evaluate_dataset = AsyncMock()
+        await execute_retrieval_evaluation(args, settings)
+
+        # RetrievalService check
+        _, r_kwargs = mock_retrieval_cls.call_args
+        assert r_kwargs["default_search_strategy"] == SearchStrategy.DENSE
+        assert r_kwargs["lexical_index"] is None
+        assert r_kwargs["fusion"] is None
+
+        # EvaluationRunner check
+        _, runner_kwargs = mock_runner_cls.call_args
+        assert runner_kwargs["search_strategy"] == SearchStrategy.DENSE
+
+
+@pytest.mark.asyncio
+async def test_cli_evaluate_hybrid_wires_hybrid_strategy_and_fusion(tmp_path: Path) -> None:
+    """Verify that --hybrid wires HYBRID strategy, BM25LexicalIndex, and RRF fusion."""
+    dataset_file = tmp_path / "dataset.json"
+    dataset_file.write_text(
+        json.dumps(
+            {
+                "cases": [
+                    {"question": "What is Python?", "expected_sources": ["doc.txt"]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    lexical_file = tmp_path / "custom_lexical.json"
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "evaluate",
+            "retrieval",
+            str(dataset_file),
+            "--in-memory",
+            "--hybrid",
+            "--lexical-index-file",
+            str(lexical_file),
+        ]
+    )
+    settings = get_settings()
+
+    with (
+        patch("ragforge.cli.EvaluationRunner") as mock_runner_cls,
+        patch("ragforge.cli.RetrievalService") as mock_retrieval_cls,
+    ):
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.evaluate_dataset = AsyncMock()
+        await execute_retrieval_evaluation(args, settings)
+
+        # RetrievalService check
+        _, r_kwargs = mock_retrieval_cls.call_args
+        assert r_kwargs["default_search_strategy"] == SearchStrategy.HYBRID
+        assert isinstance(r_kwargs["lexical_index"], BM25LexicalIndex)
+        assert isinstance(r_kwargs["fusion"], ReciprocalRankFusion)
+
+        # EvaluationRunner check
+        _, runner_kwargs = mock_runner_cls.call_args
+        assert runner_kwargs["search_strategy"] == SearchStrategy.HYBRID
+
+
+def test_cli_evaluate_hybrid_differs_from_dense_ranking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify that --hybrid changes evaluation results when lexical match alters ranking."""
+    doc_dir = tmp_path / "docs"
+    doc_dir.mkdir()
+    (doc_dir / "doc_a.txt").write_text(
+        "golang programming language compiler syntax runtime",
+        encoding="utf-8",
+    )
+    (doc_dir / "doc_b.txt").write_text(
+        "guide to using golang and elixir together for backend services",
+        encoding="utf-8",
+    )
+
+    dataset_file = tmp_path / "dataset.json"
+    dataset_file.write_text(
+        json.dumps(
+            {
+                "name": "comparison",
+                "cases": [
+                    {
+                        "question": "golang elixir",
+                        "expected_sources": ["doc_b.txt"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # 1. Run dense evaluation: doc_a ranks #1 in dense, doc_b ranks #2 -> Recall@1=0, MRR=0.5
+    exit_dense = main(
+        [
+            "evaluate",
+            "retrieval",
+            str(dataset_file),
+            "--index-path",
+            str(doc_dir),
+            "--in-memory",
+            "-k",
+            "1,2",
+            "--json",
+        ]
+    )
+    assert exit_dense == 0
+    out_dense, _ = capsys.readouterr()
+    s_idx = out_dense.find("{")
+    e_idx = out_dense.rfind("}")
+    parsed_dense = json.loads(out_dense[s_idx : e_idx + 1])
+
+    assert parsed_dense["mean_recall_at_k"]["1"] == 0.0
+    assert parsed_dense["mean_reciprocal_rank"] == 0.5
+
+    # 2. Run hybrid evaluation: BM25 matches both terms in doc_b, boosting it to rank 1
+    monkeypatch.setenv("RAGFORGE_RRF_LEXICAL_WEIGHT", "2.0")
+    get_settings.cache_clear()
+    try:
+        exit_hybrid = main(
+            [
+                "evaluate",
+                "retrieval",
+                str(dataset_file),
+                "--index-path",
+                str(doc_dir),
+                "--in-memory",
+                "--hybrid",
+                "-k",
+                "1,2",
+                "--json",
+            ]
+        )
+        assert exit_hybrid == 0
+        out_hybrid, _ = capsys.readouterr()
+        s_h = out_hybrid.find("{")
+        e_h = out_hybrid.rfind("}")
+        parsed_hybrid = json.loads(out_hybrid[s_h : e_h + 1])
+
+        assert parsed_hybrid["mean_recall_at_k"]["1"] == 1.0
+        assert parsed_hybrid["mean_reciprocal_rank"] == 1.0
+    finally:
+        get_settings.cache_clear()

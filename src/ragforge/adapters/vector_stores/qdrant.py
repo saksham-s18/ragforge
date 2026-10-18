@@ -259,27 +259,8 @@ class QdrantVectorStore(BaseVectorStore):
 
         return results
 
-    async def get(self, chunk_id: UUID) -> Chunk | None:
-        """Retrieve a single Chunk by its UUID."""
-        await self._ensure_initialized()
-        try:
-            records = await self._client.retrieve(
-                collection_name=self.collection_name,
-                ids=[str(chunk_id)],
-                with_payload=True,
-                with_vectors=True,
-            )
-        except (ResponseHandlingException, ConnectionError, OSError) as exc:
-            raise VectorStoreConnectionError(
-                f"Connection error retrieving point from Qdrant: {exc}"
-            ) from exc
-        except Exception as exc:
-            raise VectorStoreError(f"Failed to retrieve point from Qdrant: {exc}") from exc
-
-        if not records:
-            return None
-
-        record = records[0]
+    def _record_to_chunk(self, record: Any) -> Chunk:
+        """Convert a Qdrant Record instance to a domain Chunk model."""
         payload = record.payload or {}
         vector_data: list[float] | None = None
         if record.vector is not None and isinstance(record.vector, list):
@@ -301,6 +282,64 @@ class QdrantVectorStore(BaseVectorStore):
             ),
             dense_vector=vector_data,
         )
+
+    async def get(self, chunk_id: UUID) -> Chunk | None:
+        """Retrieve a single Chunk by its UUID."""
+        await self._ensure_initialized()
+        try:
+            records = await self._client.retrieve(
+                collection_name=self.collection_name,
+                ids=[str(chunk_id)],
+                with_payload=True,
+                with_vectors=True,
+            )
+        except (ResponseHandlingException, ConnectionError, OSError) as exc:
+            raise VectorStoreConnectionError(
+                f"Connection error retrieving point from Qdrant: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise VectorStoreError(f"Failed to retrieve point from Qdrant: {exc}") from exc
+
+        if not records:
+            return None
+        return self._record_to_chunk(records[0])
+
+    async def get_by_document_id(self, document_id: UUID) -> list[Chunk]:
+        """Retrieve all chunks associated with a document ID."""
+        await self._ensure_initialized()
+        chunks: list[Chunk] = []
+        offset: int | str | UUID | None = None
+        try:
+            while True:
+                records, next_offset = await self._client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="document_id",
+                                match=MatchValue(value=str(document_id)),
+                            )
+                        ]
+                    ),
+                    with_payload=True,
+                    with_vectors=True,
+                    limit=100,
+                    offset=offset,
+                )
+                for record in records:
+                    chunks.append(self._record_to_chunk(record))
+                if next_offset is None or not records:
+                    break
+                offset = next_offset
+            return chunks
+        except (ResponseHandlingException, ConnectionError, OSError) as exc:
+            raise VectorStoreConnectionError(
+                f"Connection error retrieving chunks for document {document_id} from Qdrant: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise VectorStoreError(
+                f"Failed to retrieve chunks for document {document_id} from Qdrant: {exc}"
+            ) from exc
 
     async def delete_by_chunk_id(self, chunk_id: UUID) -> bool:
         """Delete a single chunk by its ID. Returns True if deleted, False if not found."""

@@ -11,6 +11,7 @@ from ragforge.adapters.embeddings import (
     DeterministicEmbeddingProvider,
     FastEmbedProvider,
 )
+from ragforge.adapters.fusion import ReciprocalRankFusion
 from ragforge.adapters.lexical import BM25LexicalIndex
 from ragforge.adapters.rerankers import DeterministicReranker
 from ragforge.adapters.state import JsonFileIndexStateStore
@@ -20,6 +21,7 @@ from ragforge.adapters.vector_stores import (
 )
 from ragforge.core.config import Settings, get_settings
 from ragforge.core.logging import setup_logging
+from ragforge.domain.enums import SearchStrategy
 from ragforge.domain.exceptions import (
     DatasetValidationError,
     DocumentNotFoundError,
@@ -28,6 +30,7 @@ from ragforge.domain.exceptions import (
 from ragforge.domain.models import IndexingResult, RetrievalEvaluationReport
 from ragforge.evaluation import EvaluationRunner, load_evaluation_dataset
 from ragforge.ports.embeddings import BaseEmbeddingProvider
+from ragforge.ports.fusion import BaseScoreFusion
 from ragforge.ports.lexical import BaseLexicalIndex
 from ragforge.ports.vector_store import BaseVectorStore
 from ragforge.services.indexing import IndexingService
@@ -439,9 +442,19 @@ async def execute_retrieval_evaluation(
             is_hybrid = True
 
         lexical_index: BaseLexicalIndex | None = None
+        fusion: BaseScoreFusion | None = None
+        eval_strategy = SearchStrategy.HYBRID if is_hybrid else SearchStrategy.DENSE
         if is_hybrid:
             lexical_file = getattr(args, "lexical_index_file", None) or settings.lexical_index_file
             lexical_index = BM25LexicalIndex(index_file=lexical_file)
+            if settings.fusion_strategy.lower() == "rrf":
+                fusion = ReciprocalRankFusion(
+                    k=settings.rrf_k,
+                    dense_weight=settings.rrf_dense_weight,
+                    lexical_weight=settings.rrf_lexical_weight,
+                )
+            else:
+                raise ValueError(f"Unsupported fusion strategy: {settings.fusion_strategy}")
 
         if args.index_path:
             logger.info("Indexing documents from '%s' prior to evaluation", args.index_path)
@@ -458,6 +471,8 @@ async def execute_retrieval_evaluation(
             embedding_provider=provider,
             vector_store=vector_store,
             lexical_index=lexical_index,
+            fusion=fusion,
+            default_search_strategy=eval_strategy,
         )
 
         reranker = DeterministicReranker() if getattr(args, "rerank", False) else None
@@ -466,6 +481,7 @@ async def execute_retrieval_evaluation(
             k_values=k_values,
             reranker=reranker,
             candidate_k=getattr(args, "candidate_k", None),
+            search_strategy=eval_strategy,
         )
 
         report = await runner.evaluate_dataset(
